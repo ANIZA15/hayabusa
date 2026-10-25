@@ -4,6 +4,34 @@
 
 `Hayabusa` は、ASP.NET Core (Kestrel) の汎用的な抽象化コストを極限まで削ぎ落とし、**ゼロアロケーション・構造体・C# Source Generator・アンマネージド/Pinned メモリ・Thread-per-Core イベントループ**によって、**「Kestrel を超えるステートレス API / RPC 性能」**と**「60fps/30fps の Tick 同期・Room (Actor) 状態管理を内包したリアルタイムゲームサーバー」**を単一ランタイムで両立する次世代サーバーエンジンです。
 
+> **初めての方へ — 誰でもゼロから実装できる完全クイックスタート**:
+> 環境準備から Web API・MemoryPack RPC・60fps ゲームルーム（`RoomActor`）・クライアント実装・単体テスト・Docker / NativeAOT デプロイまでの全手順は **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)** にステップバイステップでまとめています。
+
+---
+
+## 目次
+
+1. **[クイックスタート（専用階層ガイド）](quickstart/クイックスタート.md)**
+   - **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)** — **誰でもゼロから実装できる完全入門書（Web / RPC / 60fps ゲームルーム / クライアント / テスト）**
+   - **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)** — **ステートレス Web / HTTP API サーバー特化ガイド**
+2. **[コンセプトと解決する課題](#コンセプトと解決する課題)**
+3. **[アーキテクチャの4大ピラー](#アーキテクチャの4大ピラー)**
+   - [1. Cysharp エコシステム × 最新 C# によるゼロアロケーション設計](#1-cysharp-エコシステム--最新-c-によるゼロアロケーション設計)
+   - [2. Thread-per-Core + LogicLooper 風 Tick ループ & Room (Actor) アフィニティ](#2-thread-per-core--logiclooper-風-tick-ループ--room-actor-アフィニティ)
+   - [3. 2つの開発者体験（Source Generator 属性ルーティング & Minimal API 風）](#3-2つの開発者体験source-generator-属性ルーティング--minimal-api-風)
+4. **[リポジトリ・モジュール構成](#リポジトリモジュール構成)**
+5. **[クイックスタート（サーバーの立ち上げ方・ローカル開発環境）](#クイックスタートサーバーの立ち上げ方ローカル開発環境)**
+   - [0. 最短で Web サーバーを構築して動かす（Minimal API & Source Generator）](#0-最短で-web-サーバーを構築して動かすminimal-api--source-generator)
+   - [1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）](#1-docker-compose-で即座にサーバーを立てるnet-sdk-のインストール不要)
+   - [2. 環境変数・起動オプションによるゼロコンフィグ設定 & ロール分離（Web単体 / ゲーム単体 / 両方）](#2-環境変数起動オプションによるゼロコンフィグ設定--ロール分離web単体--ゲーム単体--両方)
+   - [3. 自分のプロジェクトで Hayabusa サーバーを作る（NuGet / `dotnet new` テンプレート）](#3-自分のプロジェクトで-hayabusa-サーバーを作るnuget--dotnet-new-テンプレート)
+   - [4. `.devcontainer` を使ったローカル開発（Cursor / VS Code 対応）](#4-devcontainer-を使ったローカル開発cursor--vs-code-対応)
+6. **[Cysharp OSS の導入状況と統合計画](#cysharp-oss-の導入状況と統合計画)**
+7. **[プロジェクト Skills（品質・アーキテクチャ規約 / Cursor・Claude・Codex 完全統一）](#プロジェクト-skills品質アーキテクチャ規約--cursorclaudecodex-完全統一)**
+8. **[ライセンスと帰属表示（License, Attribution & Disclaimer）](#ライセンスと帰属表示license-attribution--disclaimer)**
+   - [プロジェクトライセンス](#プロジェクトライセンス)
+   - [サードパーティ OSS ライセンス（Cysharp, Inc.）](#サードパーティ-oss-ライセンスcysharp-inc)
+
 ---
 
 ## コンセプトと解決する課題
@@ -137,6 +165,8 @@ hayabusa/
 │   └── skills/                      # OpenAI Codex CLI 用スキル群 (全11種・完全同期)
 ├── scripts/
 │   └── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
+├── quickstart/
+│   └── クイックスタート.md           # 誰でもゼロから実装できる完全クイックスタートガイド (Web / RPC / Game Room / Client / Test)
 ├── docs/
 │   └── WEB_SERVER_QUICKSTART.md     # Web サーバー構築クイックスタートガイド (Minimal API / Source Generator / Docker)
 ├── .devcontainer/                   # VS Code / Cursor 用 DevContainer (.NET 9 + liburing + 拡張機能永続化)
@@ -175,8 +205,9 @@ hayabusa/
 
 さまざまな開発者・運用者が用途に応じてすぐに `Hayabusa` サーバーを立てて使用できるよう、以下の方法を用意しています。
 
-> **Web サーバー構築の詳細なステップバイステップガイド**:
-> ステートレス Web / HTTP API サーバーの構築手順（Minimal API、Source Generator 属性ルーティング、JSON / UTF-8 / `ZString` / `MemoryPack` レスポンス出力、CORS 自動対応、NativeAOT デプロイ）については、専用ガイド **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)** もあわせて参照してください。
+> **【推奨】誰でもゼロから実装できるステップバイステップ完全ガイド**:
+> - **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)**: 事前準備・新規プロジェクト作成から、Web API・`MemoryPack` バイナリ RPC・60fps ゲームルーム（`RoomActor`）・C#/Unity クライアント呼び出し・インメモリ単体テスト・NativeAOT / Docker デプロイ・FAQ まで、コピー＆ペーストで動かせる完全入門ガイドです。
+> - **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)**: ステートレス Web / HTTP API サーバー構築に特化したガイドです。
 
 ### 0. 最短で Web サーバーを構築して動かす（Minimal API & Source Generator）
 
