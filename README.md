@@ -119,12 +119,24 @@ await app.RunAsync();
 
 ---
 
-## リポジトリ・モジュール構成（予定）
+## リポジトリ・モジュール構成
 
 ```text
 hayabusa/
+├── AGENTS.md                        # Cursor / OpenAI Codex 共通の最上位エージェント指示書 (正本)
+├── agent.md                         # 汎用エージェント参照用指示書 (AGENTS.md と完全同期)
+├── CLAUDE.md                        # Claude Code 用最上位指示書 (AGENTS.md と完全同期)
 ├── .cursor/
-│   └── skills/                      # 開発・品質・セキュリティ・設計規約スキル群 (全11種)
+│   ├── rules/00-agent-instructions.mdc # Cursor 常時適用エントリルール (alwaysApply: true)
+│   └── skills/                      # Cursor 用 開発・品質・セキュリティ規約スキル群 (全11種・正本)
+├── .claude/
+│   └── skills/                      # Claude Code 用スキル群 (全11種・完全同期)
+├── .agents/
+│   └── skills/                      # OpenAI Codex / Agent Skills 標準用スキル群 (全11種・完全同期)
+├── .codex/
+│   └── skills/                      # OpenAI Codex CLI 用スキル群 (全11種・完全同期)
+├── scripts/
+│   └── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
 ├── .devcontainer/                   # VS Code / Cursor 用 DevContainer (.NET 9 + liburing + 拡張機能永続化)
 │   ├── devcontainer.json
 │   └── Dockerfile
@@ -231,9 +243,11 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 
 ---
 
-## プロジェクト Skills（品質・アーキテクチャ規約）
+## プロジェクト Skills（品質・アーキテクチャ規約 / Cursor・Claude・Codex 完全統一）
 
-本リポジトリでは、常に一貫した高品質・高安全性・ゼロアロケーションのコードベースを維持するため、`.cursor/skills/` 配下に以下の11個の専門スキルを定義しています。
+本リポジトリでは、**Cursor**、**Claude Code**、**OpenAI Codex** のどの AI エージェントを使用しても常に一貫した高品質・高安全性・ゼロアロケーションのコードベースを維持するため、[`AGENTS.md`](AGENTS.md) / [`agent.md`](agent.md) / [`CLAUDE.md`](CLAUDE.md) と4つの Skills ディレクトリ（`.cursor/skills/`、`.claude/skills/`、`.agents/skills/`、`.codex/skills/`）に以下の11個の専門スキルを完全同期して定義しています。
+
+> Skills や指示書を更新した際は `./scripts/sync-agent-skills.sh` を実行することで全環境に一括反映され、`./scripts/sync-agent-skills.sh --check` で差分ゼロを検証できます。
 
 | スキル名 | パス | 概要 |
 | --- | --- | --- |

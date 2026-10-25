@@ -1,0 +1,13 @@
+---
+description: Hayabusa 共通 AI エージェント規約（Cursor / Claude / Codex 完全統一ルール & Skills 同期規約）
+globs: 
+alwaysApply: true
+---
+
+# Hayabusa Agent Entry Rule
+
+作業を開始する際は、必ずリポジトリルートの [`AGENTS.md`](../../AGENTS.md)（および同一内容の [`agent.md`](../../agent.md) / [`CLAUDE.md`](../../CLAUDE.md)）に従ってください。
+
+1. **常に日本語で応答すること。**
+2. コードの作成・変更・レビュー・テストを行う前に、必ず `.cursor/skills/<skill-name>/SKILL.md` の該当スキルを読み込むこと。
+3. **Skills またはエージェント指示書に追加・更新・削除がある場合は、必ず `./scripts/sync-agent-skills.sh` を実行し、`.cursor/skills/`、`.claude/skills/`、`.agents/skills/`、`.codex/skills/` および `AGENTS.md` / `agent.md` / `CLAUDE.md` のすべてに同時反映させること。**
