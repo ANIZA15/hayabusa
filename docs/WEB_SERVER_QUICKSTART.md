@@ -4,6 +4,8 @@
 
 > **Web サーバー単体運用（`WebOnly` モード）について**
 > `Hayabusa` はリアルタイムゲームサーバー機能（Room Actor / 定周期 Tick）を内包していますが、`.UseWebServerOnly()`（または `--web-only` / `HAYABUSA_ROLE=web`）を指定することで、**ゲームの Tick スケジューラやバイナリ RPC 受付を完全に停止し、CPU コアごとの専用ワーカースレッドを 100% ステートレス HTTP/1.1 処理に専念させる純粋な Web サーバー**として動作します。
+>
+> ※ Web サーバーだけでなく、**MemoryPack RPC・60fps ゲームルーム（`RoomActor`）・C#/Unity クライアント・単体テストまで含めた総合入門ガイド**は **[`quickstart/クイックスタート.md`](../quickstart/クイックスタート.md)** を参照してください。
 
 ---
 
