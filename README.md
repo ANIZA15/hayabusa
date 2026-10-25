@@ -189,9 +189,9 @@ using System.Threading.Tasks;
 using Hayabusa.Rpc;
 using Hayabusa.Runtime.Hosting;
 
-// 1. Web サーバー専用モード (HTTP ポート 5000) で構築
+// 1. Web サーバー専用モード (HTTP ポート 8000) で構築
 using HayabusaApp app = HayabusaApp.CreateBuilder(args)
-    .UseWebServerOnly(httpPort: 5000)
+    .UseWebServerOnly(httpPort: 8000)
     .Build();
 
 // 2. Minimal API スタイルでのエンドポイント定義 (ゼロアロケーション出力)
@@ -219,12 +219,12 @@ public sealed partial class UserWebService
 リポジトリ同梱のサンプルサーバーを Web 専用モードで即座に試す場合は、以下のコマンドを実行します。
 
 ```bash
-# サンプルサーバーを Web 専用モード (Port: 5000) で起動
-dotnet run --project samples/Hayabusa.SampleServer -c Release -- --web-only --http-port 5000
+# サンプルサーバーを Web 専用モード (Port: 8000) で起動
+dotnet run --project samples/Hayabusa.SampleServer -c Release -- --web-only --http-port 8000
 
 # 別ターミナルから動作確認
-curl -i http://localhost:5000/health
-curl -i http://localhost:5000/api/status
+curl -i http://localhost:8000/health
+curl -i http://localhost:8000/api/status
 ```
 
 ### 1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）
@@ -235,7 +235,7 @@ Docker さえあれば、1コマンドで `io_uring` 最適化設定済みの `H
 # 設定をカスタマイズする場合は .env を作成（省略時はデフォルト値で起動）
 cp .env.example .env
 
-# サーバーのビルドと起動（HTTP: 5000, MemoryPack RPC / Room: 5001）
+# サーバーのビルドと起動（HTTP: 8000, MemoryPack RPC / Room: 8001）
 docker compose up -d --build
 ```
 
@@ -251,21 +251,21 @@ docker compose build --build-arg PUBLISH_AOT=true
 
 ```csharp
 // 1. Web サーバー単体として起動 (Game Tick スケジューラを停止し、HTTP 処理に 100% 専念)
-var webApp = HayabusaApp.CreateBuilder(args).UseWebServerOnly(httpPort: 5000).Build();
+var webApp = HayabusaApp.CreateBuilder(args).UseWebServerOnly(httpPort: 8000).Build();
 
 // 2. ゲームサーバー単体として起動 (HTTP パーサを無効化し、MemoryPack RPC & 60fps Tick に専念)
-var gameApp = HayabusaApp.CreateBuilder(args).UseGameServerOnly(tickRateHz: 60, rpcPort: 5001).Build();
+var gameApp = HayabusaApp.CreateBuilder(args).UseGameServerOnly(tickRateHz: 60, rpcPort: 8001).Build();
 
 // 3. Web + ゲームサーバー両方として起動 (デフォルト: HTTP と Game RPC/Tick の両方を単一ランタイムで処理)
-var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 5000, rpcPort: 5001, tickRateHz: 60).Build();
+var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 8000, rpcPort: 8001, tickRateHz: 60).Build();
 ```
 
 | 環境変数 | CLI 引数 | デフォルト値 | 説明 |
 | --- | --- | --- | --- |
 | `HAYABUSA_ROLE` | `--role` (`--web-only` / `--game-only` / `--web-and-game`) | `both` (`WebAndGame`) | `web`（Web サーバー単体）、`game`（ゲームサーバー単体）、`both`（Web・ゲーム両方受け入れ） |
 | `HAYABUSA_BIND_ADDRESS` | `--bind` | `0.0.0.0` | バインドする IP アドレス |
-| `HAYABUSA_HTTP_PORT` | `--http-port` | `5000` | HTTP / Minimal API 待ち受けポート |
-| `HAYABUSA_RPC_PORT` | `--rpc-port` | `5001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
+| `HAYABUSA_HTTP_PORT` | `--http-port` | `8000` | HTTP / Minimal API 待ち受けポート |
+| `HAYABUSA_RPC_PORT` | `--rpc-port` | `8001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
 | `HAYABUSA_WORKER_THREADS` | `--workers` | `0` | Thread-per-Core スレッド数（`0` でコンテナの CPU コア数を自動検出） |
 | `HAYABUSA_TICK_RATE` | `--tick-rate` | `60` | Room (Actor) の定周期 Tick レート（Hz: `60` = 60fps、`30` = 30fps） |
 | `HAYABUSA_TRANSPORT` | `--transport` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket` |
@@ -331,25 +331,6 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 | **Thread-per-Core & Tick 統合** | [`.cursor/skills/thread-per-core-game-loop/SKILL.md`](.cursor/skills/thread-per-core-game-loop/SKILL.md) | 1コア1スレッド固定ループ、Deadline 連動 I/O Wait と LogicLooper 風 Tick の統合、Room アフィニティとロックフリー MPSC Mailbox |
 | **ベンチマーク & プロファイリング** | [`.cursor/skills/benchmarking-and-profiling/SKILL.md`](.cursor/skills/benchmarking-and-profiling/SKILL.md) | `BenchmarkDotNet`（`MemoryDiagnoser` / `DisassemblyDiagnoser`）による Kestrel 比較指標とアロケーション 0B ゲート |
 | **配布・コンテナ化・導入体験** | [`.cursor/skills/distribution-and-containerization/SKILL.md`](.cursor/skills/distribution-and-containerization/SKILL.md) | Docker / NuGet / `dotnet new` テンプレートの3経路配布、環境変数によるゼロコンフィグ起動、`io_uring` 自動フォールバック、`.devcontainer` 永続化規約 |
-
----
-
-## 実装ロードマップ
-
-- [x] **Phase 0: 設計方針策定 & Skills / アーキテクチャ規約整備**
-- [x] **Phase 1: `Hayabusa.Core` & `Hayabusa.Rpc` コア基盤実装**
-  - 強い型プリミティブ（`ConnectionId`, `RoomId`, `MethodId`, `TickNumber`, `CoreIndex`）
-  - Thread-Local Slab Pool / Pinned RingBuffer & リーク検知機構
-  - MemoryPack RPC フレームパーサ & 最小 HTTP パーサ（単体テスト & ペネトレーションテスト含む）
-- [x] **Phase 2: `Hayabusa.Runtime`（Thread-per-Core + LogicLooper 風 Tick + Room Actor）実装**
-  - コア固定ワーカースレッド、ロックフリー MPSC Mailbox、Timing Wheel タイムアウト管理
-  - `RoomActor` 基底クラスと定周期 Tick スケジューラ
-- [x] **Phase 3: `Hayabusa.Generator`（C# Incremental Source Generator）実装**
-  - `[HayabusaService]` / `[Rpc]` / `[Get]` / `[Post]` からのゼロアロケーションディスパッチャ & クライアント自動生成
-- [x] **Phase 4: `Hayabusa.Transport`（Linux `io_uring` & Cross-Platform Socket IOCP）実装**
-  - Completion トランスポート層とバッチ Submit パイプライン
-- [x] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
-  - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
 
 ---
 
