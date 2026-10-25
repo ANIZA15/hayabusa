@@ -1,0 +1,34 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,props,targets,csproj,sln}]
+indent_size = 2
+
+[*.cs]
+# File-scoped namespaces (Coding Standards §3.1)
+csharp_style_namespace_declarations = file_scoped:error
+
+# Sealed classes by default & readonly structs (Coding Standards §3.3, §3.4)
+dotnet_diagnostic.CA1852.severity = error
+
+# Cyclomatic Complexity & Maintainability (Cyclomatic Complexity Skill §2.1)
+dotnet_diagnostic.CA1502.severity = error
+dotnet_diagnostic.CA1505.severity = error
+dotnet_diagnostic.CA1506.severity = warning
+
+# Strict Typing & Exhaustive Switch (Strict Typing Skill §1)
+dotnet_diagnostic.CS8509.severity = error
+dotnet_diagnostic.CS8524.severity = error
+dotnet_diagnostic.CA1062.severity = error
+
+# Zero-Leak Memory & Disposal Guarantees (Zero-Leak Memory Skill §1)
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA1816.severity = error
+dotnet_diagnostic.CA2012.severity = error

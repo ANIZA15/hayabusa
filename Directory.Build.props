@@ -1,0 +1,28 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>Nullable;CS8509;CS8524;CA1062;CA1502;CA1505;CA2000</WarningsAsErrors>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Package & OSS Metadata -->
+    <Authors>Hayabusa Contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/ANIZA15/hayabusa</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- Include THIRD-PARTY-NOTICES.md in all NuGet packages and publish outputs -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.md')">
+    <None Include="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.md"
+          Pack="true"
+          PackagePath="\"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

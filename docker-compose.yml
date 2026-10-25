@@ -1,0 +1,35 @@
+services:
+  hayabusa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Release
+        PUBLISH_AOT: "false"
+    container_name: hayabusa-server
+    ports:
+      - "${HAYABUSA_HTTP_PORT:-5000}:5000"
+      - "${HAYABUSA_RPC_PORT:-5001}:5001"
+    environment:
+      HAYABUSA_BIND_ADDRESS: "0.0.0.0"
+      HAYABUSA_HTTP_PORT: "5000"
+      HAYABUSA_RPC_PORT: "5001"
+      # 0 = Auto-detect container CPU quota / logical cores (Thread-per-Core)
+      HAYABUSA_WORKER_THREADS: "${HAYABUSA_WORKER_THREADS:-0}"
+      # Game Room Tick frequency in Hz (e.g. 60fps or 30fps)
+      HAYABUSA_TICK_RATE: "${HAYABUSA_TICK_RATE:-60}"
+      # Transport backend: "auto" (prefers io_uring on Linux), "io_uring", or "socket"
+      HAYABUSA_TRANSPORT: "${HAYABUSA_TRANSPORT:-auto}"
+    # Unlock io_uring Registered Buffers (memlock) and real-time thread scheduling
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    cap_add:
+      - SYS_NICE
+    security_opt:
+      - seccomp:unconfined
+    restart: unless-stopped
