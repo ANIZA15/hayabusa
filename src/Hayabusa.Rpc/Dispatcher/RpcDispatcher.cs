@@ -134,6 +134,26 @@ public sealed class RpcDispatcher
         _httpRoutes.Add(new HttpRouteEntry(method, Encoding.UTF8.GetBytes(path), handler));
     }
 
+    [ThreadStatic]
+    private static PooledBufferWriter? t_httpRpcScratchWriter;
+
+    /// <summary>
+    /// Synchronously dispatches an incoming binary RPC frame against registered Minimal API handlers without writing an error frame on miss.
+    /// Used by <c>CoreWorker</c> before falling back to source-generated <see cref="IHayabusaRpcService"/> dispatch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryDispatchMinimalSync(
+        HayabusaContext context,
+        in FrameSlice frame,
+        PooledBufferWriter responseWriter)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(responseWriter);
+
+        MinimalRpcInvokeDelegate? minimalHandler = ResolveMinimalHandler(frame.Header.MethodId.Value);
+        return minimalHandler is not null && minimalHandler(context, frame.Header.MethodId, frame.Payload, responseWriter);
+    }
+
     /// <summary>
     /// Synchronously dispatches an incoming binary RPC frame with zero heap allocations on the hot path.
     /// Uses $O(1)$ direct array indexing for method IDs under 1024.
@@ -144,21 +164,24 @@ public sealed class RpcDispatcher
         in FrameSlice frame,
         PooledBufferWriter responseWriter)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(responseWriter);
-
-        int id = frame.Header.MethodId.Value;
-        MinimalRpcInvokeDelegate? minimalHandler = (uint)id < FastJumpTableSize
-            ? _fastRpcJumpTable[id]
-            : (_minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? fallback) ? fallback : null);
-
-        if (minimalHandler is not null)
+        if (TryDispatchMinimalSync(context, in frame, responseWriter))
         {
-            return minimalHandler(context, frame.Header.MethodId, frame.Payload, responseWriter);
+            return true;
         }
 
         WriteUnknownMethodErrorFrame(ref responseWriter, frame.Header.MethodId);
         return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private MinimalRpcInvokeDelegate? ResolveMinimalHandler(int id)
+    {
+        if ((uint)id < FastJumpTableSize)
+        {
+            return _fastRpcJumpTable[id];
+        }
+
+        return _minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? fallback) ? fallback : null;
     }
 
     /// <summary>
@@ -220,11 +243,7 @@ public sealed class RpcDispatcher
         ReadOnlySpan<byte> payload,
         PooledBufferWriter responseWriter)
     {
-        int id = methodId.Value;
-        MinimalRpcInvokeDelegate? minimalHandler = (uint)id < FastJumpTableSize
-            ? _fastRpcJumpTable[id]
-            : (_minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? fallback) ? fallback : null);
-
+        MinimalRpcInvokeDelegate? minimalHandler = ResolveMinimalHandler(methodId.Value);
         if (minimalHandler is not null)
         {
             return minimalHandler(context, methodId, payload, responseWriter);
@@ -235,7 +254,8 @@ public sealed class RpcDispatcher
     }
 
     /// <summary>
-    /// Dispatches a parsed HTTP request across registered source-generated services and Minimal API routes.
+    /// Dispatches a parsed HTTP request across CORS preflight, HTTP-tunneled RPC (<c>POST /rpc</c>),
+    /// registered source-generated services, and Minimal API routes.
     /// </summary>
     public bool DispatchHttp(
         HayabusaContext context,
@@ -245,6 +265,25 @@ public sealed class RpcDispatcher
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(responseWriter);
 
+        if (request.Method == HttpMethodKind.Options)
+        {
+            HttpResponseWriter.WriteCorsPreflight204(ref responseWriter);
+            return true;
+        }
+
+        if (TryDispatchHttpRpcTunnel(context, in request, responseWriter))
+        {
+            return true;
+        }
+
+        return TryDispatchRegisteredHttpRoutes(context, in request, responseWriter);
+    }
+
+    private bool TryDispatchRegisteredHttpRoutes(
+        HayabusaContext context,
+        in HttpRequestView request,
+        PooledBufferWriter responseWriter)
+    {
         for (int i = 0; i < _generatedServices.Count; i++)
         {
             if (_generatedServices[i].TryDispatchHttp(context, in request, responseWriter))
@@ -265,6 +304,69 @@ public sealed class RpcDispatcher
 
         HttpResponseWriter.WriteNotFound(ref responseWriter);
         return false;
+    }
+
+    private bool TryDispatchHttpRpcTunnel(
+        HayabusaContext context,
+        in HttpRequestView request,
+        PooledBufferWriter responseWriter)
+    {
+        if (request.Method != HttpMethodKind.Post || !request.Path.SequenceEqual("/rpc"u8))
+        {
+            return false;
+        }
+
+        FrameParseError err = FrameParser.TryParse(request.Body, RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+        if (err != FrameParseError.None)
+        {
+            HttpResponseWriter.WriteBadRequest(ref responseWriter);
+            return true;
+        }
+
+        ExecuteHttpTunneledRpc(context, in frame, responseWriter);
+        return true;
+    }
+
+    private void ExecuteHttpTunneledRpc(
+        HayabusaContext context,
+        in FrameSlice frame,
+        PooledBufferWriter responseWriter)
+    {
+        PooledBufferWriter scratch = GetHttpRpcScratchWriter();
+        if (!TryDispatchMinimalSync(context, in frame, scratch))
+        {
+            ReadOnlyMemory<byte> payloadCopy = frame.Payload.ToArray();
+            CompleteHttpRpcDispatch(DispatchAsync(context, frame.Header.MethodId, payloadCopy, scratch));
+        }
+
+        HttpResponseWriter.WriteOkMemoryPack(ref responseWriter, scratch.WrittenSpan);
+    }
+
+    private static void CompleteHttpRpcDispatch(ValueTask<bool> dispatchTask)
+    {
+        if (dispatchTask.IsCompleted)
+        {
+            _ = dispatchTask.GetAwaiter().GetResult();
+            return;
+        }
+
+        _ = dispatchTask.AsTask().GetAwaiter().GetResult();
+    }
+
+    private static PooledBufferWriter GetHttpRpcScratchWriter()
+    {
+        PooledBufferWriter? writer = t_httpRpcScratchWriter;
+        if (writer is null)
+        {
+            writer = new PooledBufferWriter(16 * 1024);
+            t_httpRpcScratchWriter = writer;
+        }
+        else
+        {
+            writer.Clear();
+        }
+
+        return writer;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

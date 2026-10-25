@@ -273,6 +273,13 @@ public sealed class HayabusaApp : IDisposable
     }
 
     /// <summary>
+    /// Creates an in-memory <see cref="Hayabusa.Rpc.Client.HayabusaRpcClient"/> bound directly to this application's <see cref="Dispatcher"/>
+    /// for zero-socket in-process calls (e.g. from Blazor Server, ASP.NET Core Kestrel handlers, or integration tests).
+    /// </summary>
+    public Hayabusa.Rpc.Client.HayabusaRpcClient CreateInMemoryClient() =>
+        Hayabusa.Rpc.Client.HayabusaRpcClient.CreateInMemory(_dispatcher);
+
+    /// <summary>
     /// Maps a Minimal API HTTP GET endpoint handler to <paramref name="path"/>.
     /// </summary>
     public HayabusaApp MapGet(string path, HayabusaHttpHandler handler)

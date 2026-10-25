@@ -21,13 +21,37 @@ public readonly partial record struct MoveCommand(float X, float Y, float Z);
 public readonly partial record struct WorldSnapshot(TickNumber Tick, int PlayerCount);
 
 /// <summary>
-/// Sample real-time battle room actor demonstrating both <c>[HayabusaService]</c> source-generated RPC dispatch
-/// (<c>ValueTask&lt;T&gt;</c> and Cysharp <c>UniTask&lt;T&gt;</c>) and deterministic 60fps <see cref="OnTick"/> state broadcasting without locks.
+/// MagicOnion-style StreamingHub receiver contract for server-to-client real-time push notifications.
+/// The Source Generator emits <c>BattleHubReceiverBroadcaster</c> (for the server <see cref="RoomActor"/>)
+/// and <c>BattleHubReceiverClientBinder</c> (for Unity / Blazor / .NET clients).
+/// </summary>
+[HayabusaHubReceiver]
+public interface IBattleHubReceiver
+{
+    /// <summary>Invoked on every connected client when the room broadcasts a 60fps world tick snapshot.</summary>
+    [Rpc(MethodId = 100)]
+    void OnWorldTick(WorldSnapshot snapshot);
+}
+
+/// <summary>
+/// MagicOnion-style shared contract interface for <see cref="BattleRoomService"/>.
+/// Methods declared here are automatically discovered by the Hayabusa Source Generator even without repeating <c>[Rpc]</c> on the class.
+/// </summary>
+public interface IBattleRoomHub : IStreamingHub<IBattleRoomHub, IBattleHubReceiver>
+{
+    /// <summary>Updates the calling player's 3D coordinates.</summary>
+    [Rpc(MethodId = 1)]
+    ValueTask<WorldSnapshot> MoveAsync(MoveCommand command);
+}
+
+/// <summary>
+/// Sample real-time battle room actor demonstrating both MagicOnion-style <see cref="IStreamingHub{TSelf, TReceiver}"/>,
+/// <c>[HayabusaService]</c> source-generated RPC dispatch (<c>ValueTask&lt;T&gt;</c>, Cysharp <c>UniTask&lt;T&gt;</c>, and sync methods),
+/// and deterministic 60fps <see cref="OnTick"/> state broadcasting without locks.
 /// </summary>
 [HayabusaService]
-public sealed partial class BattleRoomService : RoomActor
+public sealed partial class BattleRoomService : RoomActor, IBattleRoomHub
 {
-    private static readonly MethodId SnapshotBroadcastMethodId = new(100);
     private readonly Dictionary<ConnectionId, MoveCommand> _playerPositions = new();
 
     /// <summary>Gets the last known position of a connected player.</summary>
@@ -91,6 +115,6 @@ public sealed partial class BattleRoomService : RoomActor
     private void BroadcastWorldState(TickNumber tick)
     {
         var snapshot = new WorldSnapshot(tick, PlayerCount);
-        _ = BroadcastSnapshot(SnapshotBroadcastMethodId, in snapshot);
+        _ = this.BroadcastOnWorldTick(snapshot);
     }
 }

@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -13,16 +16,20 @@ using MemoryPack;
 namespace Hayabusa.Rpc.Client;
 
 /// <summary>
-/// High-performance binary MemoryPack RPC client for Hayabusa servers.
-/// Supports both raw TCP connections (<see cref="ConnectAsync"/>) and zero-socket in-memory dispatch (<see cref="CreateInMemory"/>).
+/// High-performance binary MemoryPack RPC and StreamingHub client for Hayabusa servers.
+/// Supports raw TCP connections (<see cref="ConnectAsync"/>), HTTP/1.1 &amp; Kestrel/WASM RPC tunneling (<see cref="CreateHttp"/>),
+/// and zero-socket in-memory dispatch (<see cref="CreateInMemory"/>).
 /// Ownership: Caller must call <see cref="Dispose"/> to close the underlying socket and return pooled buffers.
 /// </summary>
 public sealed class HayabusaRpcClient : IDisposable
 {
     private readonly TcpClient? _tcpClient;
     private readonly NetworkStream? _stream;
+    private readonly HttpClient? _httpClient;
+    private readonly string _httpEndpoint = "/rpc";
     private readonly RpcDispatcher? _inMemoryDispatcher;
     private readonly HayabusaContext? _inMemoryContext;
+    private readonly Dictionary<MethodId, Action<ReadOnlyMemory<byte>>> _broadcastHandlers = new();
     private readonly PooledBufferWriter _sendWriter = new(4096);
     private readonly PooledBufferWriter _inMemoryResponseWriter = new(4096);
     private readonly byte[] _receiveBuffer = new byte[RpcHeader.DefaultMaxFrameSize * 2];
@@ -39,6 +46,12 @@ public sealed class HayabusaRpcClient : IDisposable
     {
         _inMemoryDispatcher = dispatcher;
         _inMemoryContext = new HayabusaContext(CoreIndex.Zero, _inMemoryResponseWriter);
+    }
+
+    private HayabusaRpcClient(HttpClient httpClient, string endpoint)
+    {
+        _httpClient = httpClient;
+        _httpEndpoint = string.IsNullOrWhiteSpace(endpoint) ? "/rpc" : endpoint;
     }
 
     /// <summary>
@@ -67,12 +80,104 @@ public sealed class HayabusaRpcClient : IDisposable
 
     /// <summary>
     /// Creates an in-memory <see cref="HayabusaRpcClient"/> bound directly to an <see cref="RpcDispatcher"/>
-    /// for deterministic unit testing and in-process invocation without opening TCP sockets.
+    /// for deterministic unit testing and in-process invocation (e.g. Blazor Server / ASP.NET Core hybrid) without opening TCP sockets.
     /// </summary>
     public static HayabusaRpcClient CreateInMemory(RpcDispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         return new HayabusaRpcClient(dispatcher);
+    }
+
+    /// <summary>
+    /// Creates an HTTP-tunneled <see cref="HayabusaRpcClient"/> over <paramref name="httpClient"/> (targeting <c>POST /rpc</c>)
+    /// for environments where raw TCP sockets are unavailable (such as Blazor WebAssembly, Unity WebGL, or Kestrel reverse proxies).
+    /// </summary>
+    public static HayabusaRpcClient CreateHttp(HttpClient httpClient, string endpoint = "/rpc")
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        return new HayabusaRpcClient(httpClient, endpoint);
+    }
+
+    /// <summary>
+    /// Subscribes a raw payload callback to server-pushed <see cref="RpcFrameFlags.Broadcast"/> frames for <paramref name="methodId"/>.
+    /// Returns an <see cref="IDisposable"/> token compatible with Cysharp <c>R3.DisposableBag</c>.
+    /// </summary>
+    public IDisposable SubscribeBroadcast(MethodId methodId, Action<ReadOnlyMemory<byte>> handler)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(handler);
+
+        if (_broadcastHandlers.TryGetValue(methodId, out Action<ReadOnlyMemory<byte>>? existing))
+        {
+            _broadcastHandlers[methodId] = existing + handler;
+        }
+        else
+        {
+            _broadcastHandlers[methodId] = handler;
+        }
+
+        return new BroadcastSubscription(this, methodId, handler);
+    }
+
+    /// <summary>
+    /// Subscribes a strongly-typed <c>MemoryPack</c>-deserialized callback to server-pushed <see cref="RpcFrameFlags.Broadcast"/> frames for <paramref name="methodId"/>.
+    /// Returns an <see cref="IDisposable"/> token compatible with Cysharp <c>R3.DisposableBag</c>.
+    /// </summary>
+    public IDisposable SubscribeBroadcast<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TPayload>(
+        MethodId methodId,
+        Action<TPayload> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        return SubscribeBroadcast(
+            methodId,
+            payload =>
+            {
+                TPayload? value = MemoryPackSerializer.Deserialize<TPayload>(payload.Span);
+                handler(value!);
+            });
+    }
+
+    /// <summary>
+    /// Parses all complete <see cref="RpcFrameFlags.Broadcast"/> frames in <paramref name="rawFrames"/>
+    /// and invokes any registered broadcast/receiver callbacks. Returns the number of broadcast frames dispatched.
+    /// </summary>
+    public int ProcessBroadcastFrames(ReadOnlySpan<byte> rawFrames)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        int dispatched = 0;
+        ReadOnlySpan<byte> cursor = rawFrames;
+
+        while (!cursor.IsEmpty)
+        {
+            FrameParseError err = FrameParser.TryParse(cursor, RpcHeader.DefaultMaxFrameSize, out FrameSlice slice);
+            if (err != FrameParseError.None)
+            {
+                break;
+            }
+
+            if (TryDispatchBroadcastSlice(in slice))
+            {
+                dispatched++;
+            }
+
+            cursor = cursor.Slice(slice.ConsumedBytes);
+        }
+
+        return dispatched;
+    }
+
+    /// <summary>
+    /// Reads once from the underlying TCP stream and dispatches any buffered <see cref="RpcFrameFlags.Broadcast"/> frames.
+    /// </summary>
+    public async ValueTask<int> ReceiveBroadcastsOnceAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_stream is not null && _bufferedBytes == 0)
+        {
+            await FillReceiveBufferAsync(cancellationToken);
+        }
+
+        return DrainBufferedBroadcastFrames();
     }
 
     /// <summary>
@@ -166,10 +271,64 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         _disposed = true;
+        _broadcastHandlers.Clear();
         _stream?.Dispose();
         _tcpClient?.Dispose();
         _sendWriter.Dispose();
         _inMemoryResponseWriter.Dispose();
+    }
+
+    private void UnsubscribeBroadcast(MethodId methodId, Action<ReadOnlyMemory<byte>> handler)
+    {
+        if (!_broadcastHandlers.TryGetValue(methodId, out Action<ReadOnlyMemory<byte>>? current))
+        {
+            return;
+        }
+
+        Action<ReadOnlyMemory<byte>>? updated = current - handler;
+        if (updated is null)
+        {
+            _broadcastHandlers.Remove(methodId);
+        }
+        else
+        {
+            _broadcastHandlers[methodId] = updated;
+        }
+    }
+
+    private bool TryDispatchBroadcastSlice(in FrameSlice slice)
+    {
+        if ((slice.Header.Flags & RpcFrameFlags.Broadcast) == 0)
+        {
+            return false;
+        }
+
+        if (_broadcastHandlers.TryGetValue(slice.Header.MethodId, out Action<ReadOnlyMemory<byte>>? handler))
+        {
+            handler(slice.Payload.ToArray());
+            return true;
+        }
+
+        return false;
+    }
+
+    private int DrainBufferedBroadcastFrames()
+    {
+        int count = 0;
+        while (_bufferedBytes > 0)
+        {
+            FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+            if (err != FrameParseError.None || (frame.Header.Flags & RpcFrameFlags.Broadcast) == 0)
+            {
+                break;
+            }
+
+            _ = TryDispatchBroadcastSlice(in frame);
+            ConsumeBufferedBytes(frame.ConsumedBytes);
+            count++;
+        }
+
+        return count;
     }
 
     private async ValueTask<TResponse> SendAndDeserializeAsync<
@@ -180,6 +339,11 @@ public sealed class HayabusaRpcClient : IDisposable
         if (_inMemoryDispatcher is not null)
         {
             return await ExecuteInMemoryWithResultAsync<TResponse>(methodId);
+        }
+
+        if (_httpClient is not null)
+        {
+            return await ExecuteHttpWithResultAsync<TResponse>(methodId, cancellationToken);
         }
 
         await _stream!.WriteAsync(_sendWriter.WrittenMemory, cancellationToken);
@@ -194,8 +358,41 @@ public sealed class HayabusaRpcClient : IDisposable
             return;
         }
 
+        if (_httpClient is not null)
+        {
+            await ExecuteHttpVoidAsync(methodId, cancellationToken);
+            return;
+        }
+
         await _stream!.WriteAsync(_sendWriter.WrittenMemory, cancellationToken);
         await ReadStreamVoidAckAsync(methodId, cancellationToken);
+    }
+
+    private async ValueTask<TResponse> ExecuteHttpWithResultAsync<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        MethodId methodId,
+        CancellationToken cancellationToken)
+    {
+        byte[] responseBytes = await PostHttpRpcFrameAsync(cancellationToken);
+        FrameParseError err = FrameParser.TryParse(responseBytes, RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+        ValidateResponseFrame(err, frame.Header.Flags, methodId);
+        return MemoryPackSerializer.Deserialize<TResponse>(frame.Payload)!;
+    }
+
+    private async ValueTask ExecuteHttpVoidAsync(MethodId methodId, CancellationToken cancellationToken)
+    {
+        byte[] responseBytes = await PostHttpRpcFrameAsync(cancellationToken);
+        FrameParseError err = FrameParser.TryParse(responseBytes, RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+        ValidateResponseFrame(err, frame.Header.Flags, methodId);
+    }
+
+    private async ValueTask<byte[]> PostHttpRpcFrameAsync(CancellationToken cancellationToken)
+    {
+        using var content = new ReadOnlyMemoryContent(_sendWriter.WrittenMemory);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/x-memorypack");
+        using HttpResponseMessage response = await _httpClient!.PostAsync(new Uri(_httpEndpoint, UriKind.RelativeOrAbsolute), content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
     private async ValueTask<TResponse> ExecuteInMemoryWithResultAsync<
@@ -263,6 +460,7 @@ public sealed class HayabusaRpcClient : IDisposable
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
         if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
         {
+            _ = TryDispatchBroadcastSlice(in frame);
             ConsumeBufferedBytes(frame.ConsumedBytes);
             return false;
         }
@@ -281,9 +479,15 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        bool isBroadcast = (frame.Header.Flags & RpcFrameFlags.Broadcast) != 0;
+        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
+        {
+            _ = TryDispatchBroadcastSlice(in frame);
+            ConsumeBufferedBytes(frame.ConsumedBytes);
+            return false;
+        }
+
         ConsumeBufferedBytes(frame.ConsumedBytes);
-        return !isBroadcast;
+        return true;
     }
 
     private static void ValidateResponseFrame(FrameParseError error, RpcFrameFlags flags, MethodId methodId)
@@ -320,5 +524,28 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         _bufferedBytes = remaining;
+    }
+
+    private sealed class BroadcastSubscription : IDisposable
+    {
+        private readonly HayabusaRpcClient _owner;
+        private readonly MethodId _methodId;
+        private Action<ReadOnlyMemory<byte>>? _handler;
+
+        public BroadcastSubscription(HayabusaRpcClient owner, MethodId methodId, Action<ReadOnlyMemory<byte>> handler)
+        {
+            _owner = owner;
+            _methodId = methodId;
+            _handler = handler;
+        }
+
+        public void Dispose()
+        {
+            Action<ReadOnlyMemory<byte>>? h = Interlocked.Exchange(ref _handler, null);
+            if (h is not null)
+            {
+                _owner.UnsubscribeBroadcast(_methodId, h);
+            }
+        }
     }
 }

@@ -19,16 +19,22 @@ public static class HttpResponseWriter
     private static byte[] s_cachedDateAndServerHeader = BuildDateAndServerHeaderBytes(DateTimeOffset.UtcNow);
 
     private static ReadOnlySpan<byte> Status200HeaderPrefix =>
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: "u8;
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: keep-alive\r\nContent-Length: "u8;
 
     private static ReadOnlySpan<byte> Status200JsonHeaderPrefix =>
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: "u8;
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: keep-alive\r\nContent-Length: "u8;
+
+    private static ReadOnlySpan<byte> Status200MemoryPackHeaderPrefix =>
+        "HTTP/1.1 200 OK\r\nContent-Type: application/x-memorypack\r\nAccess-Control-Allow-Origin: *\r\nConnection: keep-alive\r\nContent-Length: "u8;
+
+    private static ReadOnlySpan<byte> Status204CorsPreflightResponse =>
+        "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, HEAD\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Hayabusa-MethodId\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"u8;
 
     private static ReadOnlySpan<byte> Status400Response =>
-        "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8;
+        "HTTP/1.1 400 Bad Request\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8;
 
     private static ReadOnlySpan<byte> Status404Response =>
-        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"u8;
+        "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"u8;
 
     /// <summary>
     /// Gets the pre-formatted <c>"Server: Hayabusa\r\nDate: &lt;RFC1123&gt;\r\n"</c> UTF-8 bytes, refreshed at most once per second.
@@ -68,6 +74,28 @@ public static class HttpResponseWriter
         where TWriter : IBufferWriter<byte>, allows ref struct
     {
         WriteResponseWithPrefix(ref writer, Status200JsonHeaderPrefix, utf8JsonBody);
+    }
+
+    /// <summary>
+    /// Writes a 200 OK HTTP/1.1 binary MemoryPack response with the given payload into <paramref name="writer"/> with zero heap allocations.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteOkMemoryPack<TWriter>(ref TWriter writer, scoped ReadOnlySpan<byte> memoryPackBody)
+        where TWriter : IBufferWriter<byte>, allows ref struct
+    {
+        WriteResponseWithPrefix(ref writer, Status200MemoryPackHeaderPrefix, memoryPackBody);
+    }
+
+    /// <summary>
+    /// Writes a 204 No Content HTTP/1.1 CORS preflight response into <paramref name="writer"/> with zero heap allocations.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteCorsPreflight204<TWriter>(ref TWriter writer)
+        where TWriter : IBufferWriter<byte>, allows ref struct
+    {
+        Span<byte> dest = writer.GetSpan(Status204CorsPreflightResponse.Length);
+        Status204CorsPreflightResponse.CopyTo(dest);
+        writer.Advance(Status204CorsPreflightResponse.Length);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

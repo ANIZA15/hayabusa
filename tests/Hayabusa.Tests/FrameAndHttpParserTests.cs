@@ -152,6 +152,31 @@ public sealed class FrameAndHttpParserTests
         Assert.Equal(0L, after - before);
     }
 
+    [Fact]
+    public void HttpParser_OptionsCorsPreflightRequest_Dispatches204WithZeroAllocation()
+    {
+        using var writer = new PooledBufferWriter(1024);
+        var context = new HayabusaContext(CoreIndex.Zero, writer);
+        var dispatcher = new RpcDispatcher();
+        byte[] raw = "OPTIONS /rpc HTTP/1.1\r\nHost: localhost\r\nOrigin: https://example.com\r\n\r\n"u8.ToArray();
+
+        // Warmup
+        _ = HttpParser.TryParseRequest(raw, out HttpRequestView warmView);
+        _ = dispatcher.DispatchHttp(context, in warmView, writer);
+        writer.Clear();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        HttpParseError err = HttpParser.TryParseRequest(raw, out HttpRequestView view);
+        bool handled = dispatcher.DispatchHttp(context, in view, writer);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(HttpParseError.None, err);
+        Assert.Equal(HttpMethodKind.Options, view.Method);
+        Assert.True(handled);
+        Assert.True(writer.WrittenSpan.StartsWith("HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *"u8));
+        Assert.Equal(0L, after - before);
+    }
+
     private static void FeedAllExceptLastByte(ContiguousReceiveBuffer buffer, ReadOnlySpan<byte> frame)
     {
         for (int i = 0; i < frame.Length - 1; i++)

@@ -77,6 +77,26 @@ public sealed class HayabusaContext
         PooledBufferWriter writer = _responseWriter;
         HttpResponseWriter.WriteFormattedOk(ref writer, format, arg);
     }
+
+    /// <summary>
+    /// Writes a UTF-8 JSON HTTP 200 OK body directly into the response buffer without allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteJsonUtf8(scoped ReadOnlySpan<byte> utf8JsonBody)
+    {
+        PooledBufferWriter writer = _responseWriter;
+        HttpResponseWriter.WriteOkJsonUtf8(ref writer, utf8JsonBody);
+    }
+
+    /// <summary>
+    /// Writes a binary MemoryPack HTTP 200 OK body directly into the response buffer without allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteMemoryPack(scoped ReadOnlySpan<byte> memoryPackBody)
+    {
+        PooledBufferWriter writer = _responseWriter;
+        HttpResponseWriter.WriteOkMemoryPack(ref writer, memoryPackBody);
+    }
 }
 
 /// <summary>

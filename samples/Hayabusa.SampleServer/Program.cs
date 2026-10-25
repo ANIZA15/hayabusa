@@ -40,6 +40,7 @@ public static class Program
         if (app.Options.IsWebEnabled)
         {
             app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+            app.MapGet("/api/status", static ctx => ctx.WriteJsonUtf8("""{"status":"ok","engine":"Hayabusa"}"""u8));
         }
 
         return app;

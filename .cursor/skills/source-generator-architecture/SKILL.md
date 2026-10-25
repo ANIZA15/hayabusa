@@ -38,7 +38,8 @@ description: >-
      - `MethodId` 省略時の自動採番（`MethodId.FromRoute(serviceName, methodName)` と同一の 31-bit 正整数 FNV-1a ハッシュ）
      - 2個以上の引数を持つ `[Rpc]` メソッドの自動 `ValueTuple` シリアライズ／デシリアライズ展開（専用 Request DTO の定義不要）
      - `ValueTask<T>` / `UniTask<T>` に加え、同期戻り値 `T` および `void` の直接サポート
-     - `<ServiceName>Client` へのゼロアロケーション `Write*Request` と非同期呼び出しメソッド（`ConnectAsync` / `CreateInMemory` / `*Async`）の両方の自動生成
+     - `<ServiceName>Client` へのゼロアロケーション `Write*Request` と非同期呼び出しメソッド（`ConnectAsync` / `CreateInMemory` / `CreateHttp` / `*Async` / `OnBroadcast`）の自動生成
+     - MagicOnion 互換の `IService<T>` / `IStreamingHub<THub, TReceiver>` 契約インターフェースからのメソッド自動認識、および `[HayabusaHubReceiver]` インターフェースからの `<ReceiverName>Broadcaster`（サーバー側ゼロコピー Broadcast）と `<ReceiverName>ClientBinder`（クライアント側 Receiver 自動バインド）の生成
    - **HTTP ルーティング**: パス文字列を毎回比較するのではなく、パス長と先頭 4/8 バイト整数比較（`BinaryPrimitives.ReadUInt32LittleEndian` 等）を組み合わせた **コンパイル時 Radix Trie（基数木）** を C# コードとして出力する。
 
 ## 3. 診断エラー（Diagnostics）の設計

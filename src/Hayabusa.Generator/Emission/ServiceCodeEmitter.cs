@@ -6,8 +6,8 @@ using Hayabusa.Generator.Models;
 namespace Hayabusa.Generator.Emission;
 
 /// <summary>
-/// Emits zero-allocation C# source code (<c>*.g.cs</c>) for `[HayabusaService]` classes,
-/// including jump-table RPC dispatchers, Radix-style HTTP route matchers, and strongly-typed client proxies.
+/// Emits zero-allocation C# source code (<c>*.g.cs</c>) for `[HayabusaService]` classes and `[HayabusaHubReceiver]` interfaces,
+/// including jump-table RPC dispatchers, Radix-style HTTP route matchers, strongly-typed client proxies, and StreamingHub broadcasters/binders.
 /// </summary>
 internal static class ServiceCodeEmitter
 {
@@ -39,6 +39,147 @@ internal static class ServiceCodeEmitter
         EmitClientProxyClass(sb, in model);
 
         return sb.ToString();
+    }
+
+    public static string EmitHubReceiverSource(in HubReceiverModel model)
+    {
+        var sb = new StringBuilder(2048);
+        AppendFileHeader(sb, model.Header.Namespace);
+
+        string baseName = TrimInterfacePrefix(model.Header.InterfaceName);
+        EmitReceiverBroadcasterClass(sb, baseName, model.Methods);
+        sb.AppendLine();
+        EmitReceiverClientBinderClass(sb, baseName, model.Header.FullTypeName, model.Methods);
+
+        return sb.ToString();
+    }
+
+    private static string TrimInterfacePrefix(string name) =>
+        name.Length > 1 && name[0] == 'I' && char.IsUpper(name[1]) ? name.Substring(1) : name;
+
+    private static void EmitReceiverBroadcasterClass(
+        StringBuilder sb,
+        string baseName,
+        EquatableArray<RpcMethodModel> methods)
+    {
+        sb.Append("public static class ").Append(baseName).AppendLine("Broadcaster");
+        sb.AppendLine("{");
+        for (int i = 0; i < methods.Length; i++)
+        {
+            EmitSingleBroadcasterMethod(sb, methods[i]);
+        }
+
+        sb.AppendLine("}");
+    }
+
+    private static void EmitSingleBroadcasterMethod(StringBuilder sb, in RpcMethodModel method)
+    {
+        sb.Append("    public static int Broadcast").Append(method.MethodName)
+          .Append("(this global::Hayabusa.Runtime.Rooms.RoomActor room");
+        if (method.Parameters.Length > 0)
+        {
+            sb.Append(", ").Append(BuildParameterDeclarationList(method.Parameters));
+        }
+
+        sb.AppendLine(")")
+          .AppendLine("    {")
+          .AppendLine("        global::System.ArgumentNullException.ThrowIfNull(room);");
+
+        string payloadExpr = BuildBroadcastPayloadExpression(sb, method.Parameters);
+        sb.Append("        return room.BroadcastSnapshot(new global::Hayabusa.Core.Primitives.MethodId(")
+          .Append(method.MethodId).Append("), in ").Append(payloadExpr).AppendLine(");")
+          .AppendLine("    }");
+    }
+
+    private static string BuildBroadcastPayloadExpression(
+        StringBuilder sb,
+        EquatableArray<RpcParameterModel> parameters)
+    {
+        if (parameters.Length == 0)
+        {
+            sb.AppendLine("        byte emptyPayload = 0;");
+            return "emptyPayload";
+        }
+
+        if (parameters.Length == 1)
+        {
+            return parameters[0].Name;
+        }
+
+        sb.Append("        var tuplePayload = (").Append(BuildParameterNameList(parameters)).AppendLine(");");
+        return "tuplePayload";
+    }
+
+    private static void EmitReceiverClientBinderClass(
+        StringBuilder sb,
+        string baseName,
+        string fullInterfaceName,
+        EquatableArray<RpcMethodModel> methods)
+    {
+        sb.Append("public static class ").Append(baseName).AppendLine("ClientBinder");
+        sb.AppendLine("{");
+        sb.Append("    public static global::System.IDisposable BindReceiver(this global::Hayabusa.Rpc.Client.HayabusaRpcClient client, ")
+          .Append(fullInterfaceName).AppendLine(" receiver)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(client);");
+        sb.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(receiver);");
+        sb.Append("        var subscriptions = new global::System.IDisposable[").Append(methods.Length).AppendLine("];");
+
+        for (int i = 0; i < methods.Length; i++)
+        {
+            EmitSingleReceiverSubscription(sb, i, methods[i]);
+        }
+
+        sb.AppendLine("        return new CompositeReceiverSubscription(subscriptions);");
+        sb.AppendLine("    }");
+        EmitCompositeSubscriptionClass(sb);
+        sb.AppendLine("}");
+    }
+
+    private static void EmitSingleReceiverSubscription(StringBuilder sb, int index, in RpcMethodModel method)
+    {
+        sb.Append("        subscriptions[").Append(index)
+          .Append("] = client.SubscribeBroadcast(new global::Hayabusa.Core.Primitives.MethodId(")
+          .Append(method.MethodId).AppendLine("), payload =>");
+        sb.AppendLine("        {");
+        string args = EmitReceiverCallbackDeserialization(sb, method.Parameters);
+        sb.Append("            receiver.").Append(method.MethodName).Append('(').Append(args).AppendLine(");");
+        sb.AppendLine("        });");
+    }
+
+    private static string EmitReceiverCallbackDeserialization(
+        StringBuilder sb,
+        EquatableArray<RpcParameterModel> parameters)
+    {
+        if (parameters.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (parameters.Length == 1)
+        {
+            sb.Append("            var arg = global::MemoryPack.MemoryPackSerializer.Deserialize<")
+              .Append(parameters[0].TypeFullName).AppendLine(">(payload.Span);");
+            return "arg!";
+        }
+
+        string tupleType = BuildTupleTypeString(parameters);
+        sb.Append("            var arg = global::MemoryPack.MemoryPackSerializer.Deserialize<")
+          .Append(tupleType).AppendLine(">(payload.Span);");
+        return BuildTupleItemArguments("arg", parameters.Length);
+    }
+
+    private static void EmitCompositeSubscriptionClass(StringBuilder sb)
+    {
+        sb.AppendLine("    private sealed class CompositeReceiverSubscription : global::System.IDisposable");
+        sb.AppendLine("    {");
+        sb.AppendLine("        private readonly global::System.IDisposable[] _items;");
+        sb.AppendLine("        public CompositeReceiverSubscription(global::System.IDisposable[] items) => _items = items;");
+        sb.AppendLine("        public void Dispose()");
+        sb.AppendLine("        {");
+        sb.AppendLine("            for (int i = 0; i < _items.Length; i++) _items[i].Dispose();");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
     }
 
     private static void AppendFileHeader(StringBuilder sb, string ns)
@@ -158,7 +299,7 @@ internal static class ServiceCodeEmitter
         sb.Append("                var request = global::MemoryPack.MemoryPackSerializer.Deserialize<")
           .Append(tupleType)
           .AppendLine(">(payload.Span);");
-        return BuildTupleItemArguments(parameters.Length);
+        return BuildTupleItemArguments("request", parameters.Length);
     }
 
     private static string BuildTupleTypeString(EquatableArray<RpcParameterModel> parameters)
@@ -178,7 +319,7 @@ internal static class ServiceCodeEmitter
         return sb.ToString();
     }
 
-    private static string BuildTupleItemArguments(int count)
+    private static string BuildTupleItemArguments(string varName, int count)
     {
         var sb = new StringBuilder();
         for (int i = 1; i <= count; i++)
@@ -188,7 +329,7 @@ internal static class ServiceCodeEmitter
                 sb.Append(", ");
             }
 
-            sb.Append("request.Item").Append(i.ToString(CultureInfo.InvariantCulture)).Append('!');
+            sb.Append(varName).Append(".Item").Append(i.ToString(CultureInfo.InvariantCulture)).Append('!');
         }
 
         return sb.ToString();
@@ -309,6 +450,8 @@ internal static class ServiceCodeEmitter
         sb.AppendLine("    private readonly global::Hayabusa.Rpc.Client.HayabusaRpcClient _client;");
         sb.AppendLine("    private readonly bool _ownsClient;");
         sb.AppendLine();
+        sb.AppendLine("    public global::Hayabusa.Rpc.Client.HayabusaRpcClient InnerClient => _client;");
+        sb.AppendLine();
         sb.Append("    public ").Append(clientClassName).AppendLine("(global::Hayabusa.Rpc.Client.HayabusaRpcClient client, bool ownsClient = false)");
         sb.AppendLine("    {");
         sb.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(client);");
@@ -316,6 +459,19 @@ internal static class ServiceCodeEmitter
         sb.AppendLine("        _ownsClient = ownsClient;");
         sb.AppendLine("    }");
         sb.AppendLine();
+        EmitClientStaticFactories(sb, clientClassName);
+        EmitClientBroadcastSubscriptionHelpers(sb);
+        sb.AppendLine("    public void Dispose()");
+        sb.AppendLine("    {");
+        sb.AppendLine("        if (_ownsClient)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            _client.Dispose();");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+    }
+
+    private static void EmitClientStaticFactories(StringBuilder sb, string clientClassName)
+    {
         sb.Append("    public static async global::System.Threading.Tasks.ValueTask<").Append(clientClassName).AppendLine("> ConnectAsync(");
         sb.AppendLine("        string host,");
         sb.AppendLine("        int port = 5001,");
@@ -331,13 +487,22 @@ internal static class ServiceCodeEmitter
         sb.Append("        return new ").Append(clientClassName).AppendLine("(client, ownsClient: true);");
         sb.AppendLine("    }");
         sb.AppendLine();
-        sb.AppendLine("    public void Dispose()");
+        sb.Append("    public static ").Append(clientClassName).AppendLine(" CreateHttp(global::System.Net.Http.HttpClient httpClient, string endpoint = \"/rpc\")");
         sb.AppendLine("    {");
-        sb.AppendLine("        if (_ownsClient)");
-        sb.AppendLine("        {");
-        sb.AppendLine("            _client.Dispose();");
-        sb.AppendLine("        }");
+        sb.AppendLine("        var client = global::Hayabusa.Rpc.Client.HayabusaRpcClient.CreateHttp(httpClient, endpoint);");
+        sb.Append("        return new ").Append(clientClassName).AppendLine("(client, ownsClient: true);");
         sb.AppendLine("    }");
+        sb.AppendLine();
+    }
+
+    private static void EmitClientBroadcastSubscriptionHelpers(StringBuilder sb)
+    {
+        sb.AppendLine("    public global::System.IDisposable OnBroadcast<[global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)] TPayload>(int methodId, global::System.Action<TPayload> handler) =>");
+        sb.AppendLine("        _client.SubscribeBroadcast(new global::Hayabusa.Core.Primitives.MethodId(methodId), handler);");
+        sb.AppendLine();
+        sb.AppendLine("    public global::System.IDisposable OnBroadcast<[global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(global::System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)] TPayload>(global::Hayabusa.Core.Primitives.MethodId methodId, global::System.Action<TPayload> handler) =>");
+        sb.AppendLine("        _client.SubscribeBroadcast(methodId, handler);");
+        sb.AppendLine();
     }
 
     private static void EmitClientWriteFrameMethod(StringBuilder sb, in RpcMethodModel rpc)

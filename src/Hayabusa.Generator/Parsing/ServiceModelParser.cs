@@ -11,8 +11,8 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Hayabusa.Generator.Parsing;
 
 /// <summary>
-/// Transforms a Roslyn <see cref="GeneratorAttributeSyntaxContext"/> into an immutable, value-equatable <see cref="ServiceModel"/>.
-/// Validates rules <c>HAYABUSA001</c> through <c>HAYABUSA005</c>.
+/// Transforms a Roslyn <see cref="GeneratorAttributeSyntaxContext"/> into an immutable, value-equatable <see cref="ServiceModel"/>
+/// or <see cref="HubReceiverModel"/>. Validates rules <c>HAYABUSA001</c> through <c>HAYABUSA005</c>.
 /// </summary>
 internal static class ServiceModelParser
 {
@@ -24,6 +24,7 @@ internal static class ServiceModelParser
     private sealed class BuilderAccumulator
     {
         public HashSet<int> SeenMethodIds { get; } = new();
+        public HashSet<string> AddedMethodNames { get; } = new(StringComparer.Ordinal);
         public ImmutableArray<RpcMethodModel>.Builder RpcMethods { get; } = ImmutableArray.CreateBuilder<RpcMethodModel>();
         public ImmutableArray<HttpRouteModel>.Builder HttpRoutes { get; } = ImmutableArray.CreateBuilder<HttpRouteModel>();
         public ImmutableArray<EquatableDiagnostic>.Builder Diagnostics { get; } = ImmutableArray.CreateBuilder<EquatableDiagnostic>();
@@ -58,6 +59,67 @@ internal static class ServiceModelParser
             new EquatableArray<RpcMethodModel>(acc.RpcMethods.ToImmutable()),
             new EquatableArray<HttpRouteModel>(acc.HttpRoutes.ToImmutable()),
             new EquatableArray<EquatableDiagnostic>(acc.Diagnostics.ToImmutable()));
+    }
+
+    public static HubReceiverModel ExtractHubReceiverModel(
+        GeneratorAttributeSyntaxContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var symbol = (INamedTypeSymbol)context.TargetSymbol;
+        var acc = new BuilderAccumulator();
+
+        ImmutableArray<ISymbol> members = symbol.GetMembers();
+        for (int i = 0; i < members.Length; i++)
+        {
+            if (members[i] is IMethodSymbol method && method.MethodKind == MethodKind.Ordinary)
+            {
+                TryAddReceiverMethod(method, acc);
+            }
+        }
+
+        string ns = symbol.ContainingNamespace.IsGlobalNamespace
+            ? string.Empty
+            : symbol.ContainingNamespace.ToDisplayString();
+        string fullType = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+        return new HubReceiverModel(
+            (ns, symbol.Name, fullType),
+            new EquatableArray<RpcMethodModel>(acc.RpcMethods.ToImmutable()),
+            new EquatableArray<EquatableDiagnostic>(acc.Diagnostics.ToImmutable()));
+    }
+
+    private static void TryAddReceiverMethod(IMethodSymbol method, BuilderAccumulator acc)
+    {
+        AttributeData? rpcAttr = FindRpcAttribute(method.GetAttributes());
+        int methodId = rpcAttr is not null
+            ? ResolveMethodId(method, rpcAttr)
+            : ComputeDeterministicMethodId(method.ContainingType.Name, method.Name);
+
+        if (methodId <= 0 || !acc.SeenMethodIds.Add(methodId))
+        {
+            return;
+        }
+
+        if (!TryExtractParameters(method, acc, out EquatableArray<RpcParameterModel> parameters))
+        {
+            return;
+        }
+
+        acc.RpcMethods.Add(new RpcMethodModel(method.Name, methodId, parameters, (string.Empty, false, false)));
+    }
+
+    private static AttributeData? FindRpcAttribute(ImmutableArray<AttributeData> attrs)
+    {
+        for (int i = 0; i < attrs.Length; i++)
+        {
+            if (attrs[i].AttributeClass?.ToDisplayString() == RpcAttributeFullName)
+            {
+                return attrs[i];
+            }
+        }
+
+        return null;
     }
 
     private static bool IsDeclaredPartialAndConcrete(ClassDeclarationSyntax syntax, INamedTypeSymbol symbol)
@@ -99,9 +161,55 @@ internal static class ServiceModelParser
         ImmutableArray<ISymbol> members = serviceSymbol.GetMembers();
         for (int i = 0; i < members.Length; i++)
         {
-            if (members[i] is IMethodSymbol methodSymbol)
+            if (members[i] is IMethodSymbol methodSymbol && methodSymbol.MethodKind == MethodKind.Ordinary)
             {
                 InspectMethodSymbol(methodSymbol, acc);
+            }
+        }
+
+        ParseMagicOnionContractMethods(serviceSymbol, acc);
+    }
+
+    private static void ParseMagicOnionContractMethods(INamedTypeSymbol serviceSymbol, BuilderAccumulator acc)
+    {
+        ImmutableArray<INamedTypeSymbol> interfaces = serviceSymbol.AllInterfaces;
+        for (int i = 0; i < interfaces.Length; i++)
+        {
+            if (IsMagicOnionContractInterface(interfaces[i]))
+            {
+                AddUnattributedContractMethods(serviceSymbol, interfaces[i], acc);
+            }
+        }
+    }
+
+    private static bool IsMagicOnionContractInterface(INamedTypeSymbol iface)
+    {
+        ImmutableArray<INamedTypeSymbol> all = iface.AllInterfaces;
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i].Name is "IService" or "IStreamingHub")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddUnattributedContractMethods(
+        INamedTypeSymbol serviceSymbol,
+        INamedTypeSymbol contractInterface,
+        BuilderAccumulator acc)
+    {
+        ImmutableArray<ISymbol> ifaceMembers = contractInterface.GetMembers();
+        for (int i = 0; i < ifaceMembers.Length; i++)
+        {
+            if (ifaceMembers[i] is IMethodSymbol ifaceMethod &&
+                serviceSymbol.FindImplementationForInterfaceMember(ifaceMethod) is IMethodSymbol implMethod &&
+                !acc.AddedMethodNames.Contains(implMethod.Name))
+            {
+                AttributeData? ifaceRpcAttr = FindRpcAttribute(ifaceMethod.GetAttributes());
+                TryAddRpcMethod(implMethod, ifaceRpcAttr, acc);
             }
         }
     }
@@ -136,9 +244,13 @@ internal static class ServiceModelParser
         }
     }
 
-    private static void TryAddRpcMethod(IMethodSymbol method, AttributeData rpcAttr, BuilderAccumulator acc)
+    private static void TryAddRpcMethod(IMethodSymbol method, AttributeData? rpcAttr, BuilderAccumulator acc)
     {
-        int methodId = ResolveMethodId(method, rpcAttr);
+        acc.AddedMethodNames.Add(method.Name);
+        int methodId = rpcAttr is not null
+            ? ResolveMethodId(method, rpcAttr)
+            : ComputeDeterministicMethodId(method.ContainingType.Name, method.Name);
+
         Location? loc = GetSymbolFirstLocation(method);
         if (methodId <= 0 || !acc.SeenMethodIds.Add(methodId))
         {
@@ -149,12 +261,8 @@ internal static class ServiceModelParser
             return;
         }
 
-        if (!TryValidateReturnType(method, acc, out (string FullName, bool HasPayload, bool IsAsync) resInfo))
-        {
-            return;
-        }
-
-        if (!TryExtractParameters(method, acc, out EquatableArray<RpcParameterModel> parameters))
+        if (!TryValidateReturnType(method, acc, out (string FullName, bool HasPayload, bool IsAsync) resInfo) ||
+            !TryExtractParameters(method, acc, out EquatableArray<RpcParameterModel> parameters))
         {
             return;
         }
