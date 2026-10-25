@@ -38,7 +38,7 @@
         "ms-azuretools.vscode-docker"
       ],
       "settings": {
-        "dotnet.defaultSolution": "Hayabusa.sln",
+        "dotnet.defaultSolution": "Hayabusa.slnx",
         "editor.formatOnSave": true,
         "files.eol": "\n",
         "files.insertFinalNewline": true,
