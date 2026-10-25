@@ -47,7 +47,9 @@ public class HayabusaHotPathBenchmarks : IDisposable
     private readonly RoomManager _thousandRoomManager;
     private readonly byte[] _sampleRpcRequestFrame;
     private readonly byte[] _sampleHttpRequestBytes;
+    private readonly byte[] _pipelined16HttpRequestBytes;
     private readonly byte[] _sampleJsonRequestBytes;
+    private readonly ContiguousReceiveBuffer _pipelineReceiveBuffer = new(64 * 1024);
     private readonly Dictionary<string, Func<string>> _aspNetStyleRouteTable = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -69,6 +71,12 @@ public class HayabusaHotPathBenchmarks : IDisposable
         seedWriter.Dispose();
 
         _sampleHttpRequestBytes = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8.ToArray();
+        _pipelined16HttpRequestBytes = new byte[_sampleHttpRequestBytes.Length * 16];
+        for (int i = 0; i < 16; i++)
+        {
+            _sampleHttpRequestBytes.AsSpan().CopyTo(_pipelined16HttpRequestBytes.AsSpan(i * _sampleHttpRequestBytes.Length));
+        }
+
         _sampleJsonRequestBytes = JsonSerializer.SerializeToUtf8Bytes(move);
 
         _broadcastRoomManager = new RoomManager(CoreIndex.Zero, _context, _submissionQueue);
@@ -175,6 +183,32 @@ public class HayabusaHotPathBenchmarks : IDisposable
         return _thousandRoomManager.ActiveCount;
     }
 
+    /// <summary>Benchmark 5 (Hayabusa Kestrel-Killer): 16x HTTP/1.1 Pipelined Plaintext Batch Parse + Dispatch + Coalesced Response (0 B target).</summary>
+    [Benchmark]
+    public int Http16PipelinedBatchPlaintext()
+    {
+        _writer.Clear();
+        _pipelineReceiveBuffer.Reset();
+        _pipelineReceiveBuffer.TryAppend(_pipelined16HttpRequestBytes);
+
+        int processed = 0;
+        while (_pipelineReceiveBuffer.ReadableBytes > 0)
+        {
+            HttpParseError err = HttpParser.TryParseRequest(_pipelineReceiveBuffer.ReadableSpan, out HttpRequestView req);
+            if (err != HttpParseError.None)
+            {
+                break;
+            }
+
+            _context.Bind(new ConnectionId(1UL), RoomId.Invalid, TickNumber.Zero, clearWriter: false);
+            _dispatcher.DispatchHttp(_context, in req, _writer);
+            _pipelineReceiveBuffer.Consume(req.ConsumedBytes);
+            processed++;
+        }
+
+        return processed;
+    }
+
     /// <summary>
     /// Runs a quick deterministic in-process comparison summary when <c>--quick-compare</c> is passed.
     /// </summary>
@@ -187,6 +221,7 @@ public class HayabusaHotPathBenchmarks : IDisposable
         {
             _ = bench.FrameParseAndHttpRouting();
             _ = bench.BaselinePipeReaderAndStringHttpRouting().GetAwaiter().GetResult();
+            _ = bench.Http16PipelinedBatchPlaintext();
             _ = bench.MemoryPackUnaryRpcEcho();
             _ = bench.BaselineSystemTextJsonAndTaskRpcEcho().GetAwaiter().GetResult();
             _ = bench.RoomBroadcast100Players();
@@ -196,11 +231,12 @@ public class HayabusaHotPathBenchmarks : IDisposable
 
         Measure("1. HTTP Parse + Routing (Hayabusa)", iterations, () => bench.FrameParseAndHttpRouting());
         Measure("1. HTTP Parse + Routing (PipeReader + String Baseline)", iterations, () => bench.BaselinePipeReaderAndStringHttpRouting().GetAwaiter().GetResult());
-        Measure("2. Unary RPC Echo (Hayabusa MemoryPack)", iterations, () => bench.MemoryPackUnaryRpcEcho());
-        Measure("2. Unary RPC Echo (System.Text.Json + Task Baseline)", iterations / 10, () => bench.BaselineSystemTextJsonAndTaskRpcEcho().GetAwaiter().GetResult());
-        Measure("3. Room Broadcast 100 Players (Hayabusa Zero-Copy)", iterations, () => bench.RoomBroadcast100Players());
-        Measure("3. Room Broadcast 100 Players (Task.WhenAll + JSON Baseline)", iterations / 10, () => bench.BaselineTaskWhenAllJsonBroadcast100Players().GetAwaiter().GetResult());
-        Measure("4. Tick 1,000 Rooms (Hayabusa LogicLooper)", iterations / 10, () => bench.Tick1000Rooms());
+        Measure("2. HTTP 16x Pipelined Batch (Hayabusa Coalesced)", iterations / 2, () => bench.Http16PipelinedBatchPlaintext());
+        Measure("3. Unary RPC Echo (Hayabusa MemoryPack)", iterations, () => bench.MemoryPackUnaryRpcEcho());
+        Measure("3. Unary RPC Echo (System.Text.Json + Task Baseline)", iterations / 10, () => bench.BaselineSystemTextJsonAndTaskRpcEcho().GetAwaiter().GetResult());
+        Measure("4. Room Broadcast 100 Players (Hayabusa Zero-Copy)", iterations, () => bench.RoomBroadcast100Players());
+        Measure("4. Room Broadcast 100 Players (Task.WhenAll + JSON Baseline)", iterations / 10, () => bench.BaselineTaskWhenAllJsonBroadcast100Players().GetAwaiter().GetResult());
+        Measure("5. Tick 1,000 Rooms (Hayabusa LogicLooper)", iterations / 10, () => bench.Tick1000Rooms());
     }
 
     private static void Measure<T>(string name, int iterations, Func<T> action)

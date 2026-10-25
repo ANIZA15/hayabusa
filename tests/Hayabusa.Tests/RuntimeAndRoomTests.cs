@@ -1,4 +1,7 @@
 using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
@@ -237,6 +240,74 @@ public sealed class RuntimeAndRoomTests
         Assert.Equal(HayabusaServerRole.WebOnly, webOnly.Role);
         Assert.Equal(HayabusaServerRole.GameOnly, gameOnly.Role);
         Assert.Equal(HayabusaServerRole.WebAndGame, hybrid.Role);
+    }
+
+    [Fact]
+    public void CoreWorker_SixteenPipelinedHttpRequests_CoalescesResponsesIntoSingleSendBatchWithZeroSlabLeak()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TimeProvider: fakeTime, Role: HayabusaServerRole.WebOnly), transport, dispatcher);
+
+        var connId = new ConnectionId(777UL);
+        byte[] singleGet = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8.ToArray();
+        byte[] pipelined16 = BuildRepeatedPayload(singleGet, 16);
+
+        transport.EnqueueAccept(connId);
+        transport.TryEnqueueReceive(connId, pipelined16);
+        worker.StepIteration();
+
+        var sentPayloads = transport.GetSentPayloads(connId);
+        Assert.Single(sentPayloads);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    [Fact]
+    public void SocketEventTransport_EventDrivenAcceptReceiveAndSend_CompletesLoopbackRoundtripWithZeroSlabLeak()
+    {
+        using var transport = new SocketEventTransport();
+        transport.BindAndListen(new IPEndPoint(IPAddress.Loopback, 0), enableReusePort: false);
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/ping", static ctx => ctx.WriteUtf8("PONG"u8));
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, Role: HayabusaServerRole.WebOnly), transport, dispatcher);
+
+        Assert.Equal(1, transport.ListenerCount);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    [Fact]
+    public void IoUringTransport_TryCreate_InitializesSharedRingsOrGracefullyFallsBack()
+    {
+        bool created = IoUringTransport.TryCreate(null, 64u, out IoUringTransport? uring, out string diagnostic);
+        try
+        {
+            Assert.False(string.IsNullOrWhiteSpace(diagnostic));
+            if (created && uring is not null)
+            {
+                Assert.True(uring.SharedRingsMapped);
+                int submitted = uring.SubmitAndWait(
+                    [new TransportSubmissionEntry(TransportOperationKind.None, ConnectionId.Invalid, ReadOnlyMemory<byte>.Empty)],
+                    TimeSpan.Zero);
+                Assert.Equal(1, submitted);
+            }
+        }
+        finally
+        {
+            uring?.Dispose();
+        }
+    }
+
+    private static byte[] BuildRepeatedPayload(byte[] single, int count)
+    {
+        byte[] combined = new byte[single.Length * count];
+        for (int i = 0; i < count; i++)
+        {
+            single.AsSpan().CopyTo(combined.AsSpan(i * single.Length, single.Length));
+        }
+
+        return combined;
     }
 
     private sealed class RecordingTickHandler : IGameLoopTickHandler

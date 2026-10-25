@@ -323,20 +323,40 @@ public sealed class HayabusaApp : IDisposable
 
     private void BindPrimaryListenerIfNeeded()
     {
-        if (_transports.Count == 0 || _transports[0] is not SocketEventTransport socketTransport)
-        {
-            return;
-        }
-
         if (!IPAddress.TryParse(_options.BindAddress, out IPAddress? ip))
         {
             return;
         }
 
-        int primaryPort = _options.Role == HayabusaServerRole.GameOnly ? _options.RpcPort : _options.HttpPort;
-        if (primaryPort > 0)
+        int listenerWorkers = OperatingSystem.IsLinux() ? _transports.Count : Math.Min(1, _transports.Count);
+        for (int i = 0; i < listenerWorkers; i++)
         {
-            socketTransport.BindAndListen(new IPEndPoint(ip, primaryPort));
+            BindPortsOnTransport(_transports[i], ip);
+        }
+    }
+
+    private void BindPortsOnTransport(ITransportBackend transport, IPAddress ip)
+    {
+        if (_options.IsWebEnabled && _options.HttpPort > 0)
+        {
+            TryBindEndpoint(transport, new IPEndPoint(ip, _options.HttpPort));
+        }
+
+        if (_options.IsGameEnabled && _options.RpcPort > 0 && _options.RpcPort != _options.HttpPort)
+        {
+            TryBindEndpoint(transport, new IPEndPoint(ip, _options.RpcPort));
+        }
+    }
+
+    private static void TryBindEndpoint(ITransportBackend transport, IPEndPoint endPoint)
+    {
+        if (transport is SocketEventTransport socketTransport)
+        {
+            socketTransport.BindAndListen(endPoint);
+        }
+        else if (transport is IoUringTransport uringTransport)
+        {
+            uringTransport.BindAndListen(endPoint);
         }
     }
 

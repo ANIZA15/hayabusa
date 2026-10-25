@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Buffers.Text;
 using System.Runtime.CompilerServices;
 
@@ -140,11 +141,20 @@ public static class HttpParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static HttpMethodKind ResolveMethod(scoped ReadOnlySpan<byte> token)
     {
-        if (token.SequenceEqual("GET"u8)) return HttpMethodKind.Get;
-        if (token.SequenceEqual("POST"u8)) return HttpMethodKind.Post;
-        if (token.SequenceEqual("PUT"u8)) return HttpMethodKind.Put;
-        if (token.SequenceEqual("DELETE"u8)) return HttpMethodKind.Delete;
-        return token.SequenceEqual("HEAD"u8) ? HttpMethodKind.Head : HttpMethodKind.Unknown;
+        return token.Length switch
+        {
+            3 => token[0] == (byte)'G' && token[1] == (byte)'E' && token[2] == (byte)'T'
+                ? HttpMethodKind.Get
+                : (token[0] == (byte)'P' && token[1] == (byte)'U' && token[2] == (byte)'T' ? HttpMethodKind.Put : HttpMethodKind.Unknown),
+            4 => BinaryPrimitives.ReadUInt32LittleEndian(token) switch
+            {
+                0x54534F50u => HttpMethodKind.Post, // "POST" in Little-Endian
+                0x44414548u => HttpMethodKind.Head, // "HEAD" in Little-Endian
+                _ => HttpMethodKind.Unknown,
+            },
+            6 => token.SequenceEqual("DELETE"u8) ? HttpMethodKind.Delete : HttpMethodKind.Unknown,
+            _ => HttpMethodKind.Unknown,
+        };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
