@@ -76,6 +76,24 @@ public sealed class TransportSubmissionQueue
         return true;
     }
 
+    /// <summary>
+    /// Enqueues a batch of submission entries using C# 13 <c>params ReadOnlySpan&lt;T&gt;</c> without array allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int TryEnqueueBatch(params ReadOnlySpan<TransportSubmissionEntry> entries)
+    {
+        int available = _entries.Length - _count;
+        int toCopy = Math.Min(available, entries.Length);
+        if (toCopy <= 0)
+        {
+            return 0;
+        }
+
+        entries.Slice(0, toCopy).CopyTo(_entries.AsSpan(_count, toCopy));
+        _count += toCopy;
+        return toCopy;
+    }
+
     /// <summary>Clears all queued entries after flushing to the transport backend.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Clear()

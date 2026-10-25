@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Cysharp.Text;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Core.Transport;
 using Hayabusa.Rpc;
@@ -12,6 +13,8 @@ using Hayabusa.Rpc.Http;
 using Hayabusa.Runtime.Engine;
 using Hayabusa.Runtime.Rooms;
 using Hayabusa.Transport;
+using Microsoft.Extensions.Logging;
+using ZLogger;
 
 namespace Hayabusa.Runtime.Hosting;
 
@@ -40,6 +43,16 @@ public sealed class HayabusaAppBuilder
     {
         ArgumentNullException.ThrowIfNull(configure);
         configure(_options);
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the structured <see cref="ILogger"/> (such as Cysharp <c>ZLogger</c>) used by worker loops and transports.
+    /// </summary>
+    public HayabusaAppBuilder UseLogger(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _options.Logger = logger;
         return this;
     }
 
@@ -162,7 +175,7 @@ public sealed class HayabusaApp : IDisposable
             CoreWorker worker = _workers[i];
             var thread = new Thread(() => worker.RunBlockingLoop(cancellationToken))
             {
-                Name = $"Hayabusa-Core-{worker.CoreIndex.Value}",
+                Name = ZString.Concat("Hayabusa-Core-", worker.CoreIndex.Value),
                 IsBackground = true,
                 Priority = ThreadPriority.AboveNormal,
             };
@@ -170,6 +183,7 @@ public sealed class HayabusaApp : IDisposable
             thread.Start();
         }
 
+        _options.Logger?.ZLogInformation($"Hayabusa server started with {_workers.Count} Thread-per-Core workers at {_options.TickRate}Hz.");
         WaitForWorkerThreads(threads, cancellationToken);
         return ValueTask.CompletedTask;
     }
@@ -202,9 +216,9 @@ public sealed class HayabusaApp : IDisposable
         int count = _options.ResolvedWorkerCount;
         for (int i = 0; i < count; i++)
         {
-            ITransportBackend transport = TransportFactory.Create(_options.Transport);
+            ITransportBackend transport = TransportFactory.Create(_options.Transport, logger: _options.Logger);
             _transports.Add(transport);
-            var config = new CoreWorkerConfig(new CoreIndex(i), _options.TickRate);
+            var config = new CoreWorkerConfig(new CoreIndex(i), _options.TickRate, Logger: _options.Logger);
             _workers.Add(new CoreWorker(config, transport, _dispatcher));
         }
     }

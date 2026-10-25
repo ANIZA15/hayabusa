@@ -131,9 +131,9 @@ hayabusa/
 ├── Dockerfile                       # 本番・スタンドアロン起動用マルチステージ Dockerfile (JIT / NativeAOT 両対応)
 ├── docker-compose.yml               # ワンコマンドで Hayabusa サーバーを立ち上げる Compose 設定
 ├── .env.example                     # サーバー起動パラメータ（ポート・TickRate・Transport）の設定サンプル
-├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定・ライセンス同梱設定
+├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定 (.NET 9 / .NET 10 / .NET 11+ マルチターゲット)・ライセンス同梱設定
 ├── .editorconfig                    # コードスタイル & 複雑度 (CA1502) / 型厳格 (CS8509) 強制設定
-├── global.json                      # .NET 9 SDK バージョン固定
+├── global.json                      # .NET 9 / .NET 10 / .NET 11+ SDK ロールフォワード設定 (latestMajor)
 ├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文
 ├── src/
 │   ├── Hayabusa.Core/               # 強い型プリミティブ、軽量Context、Pinned Slab/RingBuffer、Completion I/O 抽象

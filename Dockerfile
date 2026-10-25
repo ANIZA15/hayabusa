@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # =============================================================================
-# Stage 1: Build & Publish (Supports both JIT Release and NativeAOT)
+# Stage 1: Build & Publish (Supports both JIT Release and NativeAOT across .NET 9 / .NET 10+)
 # =============================================================================
-FROM mcr.microsoft.com/dotnet/sdk:9.0-noble AS build
+ARG DOTNET_VERSION=9.0
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-noble AS build
 ARG BUILD_CONFIGURATION=Release
 ARG PUBLISH_AOT=false
+ARG TARGET_FRAMEWORK=net9.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
@@ -25,6 +27,7 @@ RUN dotnet restore "./samples/Hayabusa.SampleServer/Hayabusa.SampleServer.csproj
 
 RUN dotnet publish "./samples/Hayabusa.SampleServer/Hayabusa.SampleServer.csproj" \
     -c "${BUILD_CONFIGURATION}" \
+    -f "${TARGET_FRAMEWORK}" \
     -p:PublishAot="${PUBLISH_AOT}" \
     -o /app/publish \
     --no-restore
@@ -32,7 +35,7 @@ RUN dotnet publish "./samples/Hayabusa.SampleServer/Hayabusa.SampleServer.csproj
 # =============================================================================
 # Stage 2: Production Runtime Image (Minimal Ubuntu 24.04 + liburing2)
 # =============================================================================
-FROM mcr.microsoft.com/dotnet/runtime:9.0-noble AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:${DOTNET_VERSION}-noble AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     liburing2 \

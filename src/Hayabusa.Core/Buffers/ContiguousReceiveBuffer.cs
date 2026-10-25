@@ -41,6 +41,13 @@ public sealed class ContiguousReceiveBuffer
         get => _buffer.AsSpan(_readOffset, _writeOffset - _readOffset);
     }
 
+    /// <summary>Gets the contiguous memory slice of unconsumed readable bytes without copying.</summary>
+    public ReadOnlyMemory<byte> ReadableMemory
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _buffer.AsMemory(_readOffset, _writeOffset - _readOffset);
+    }
+
     /// <summary>Gets the writable span at the tail of the buffer, compacting unread bytes to the front if needed.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<byte> GetWritableSpan(int minimumBytes = 1)

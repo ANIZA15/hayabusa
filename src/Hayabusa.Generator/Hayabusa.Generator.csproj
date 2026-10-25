@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk" TreatAsLocalProperty="PublishAot;SelfContained;RuntimeIdentifier">
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFrameworks></TargetFrameworks>
     <PublishAot>false</PublishAot>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier></RuntimeIdentifier>

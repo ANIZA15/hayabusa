@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Text;
 using System.Runtime.CompilerServices;
 
@@ -6,7 +7,8 @@ namespace Hayabusa.Rpc.Http;
 
 /// <summary>
 /// Branch-minimized, zero-allocation HTTP/1.1 request parser with strict RFC 9112 compliance.
-/// Defends against HTTP Request Smuggling, Header Bombs, CRLF injection, Null-byte injection, and Path Traversal.
+/// Uses SIMD-accelerated <see cref="SearchValues{T}"/> (.NET 9 / .NET 10+) to defend against HTTP Request Smuggling,
+/// Header Bombs, CRLF injection, Null-byte injection, and Path Traversal.
 /// </summary>
 public static class HttpParser
 {
@@ -19,26 +21,12 @@ public static class HttpParser
     /// <summary>Default maximum request body size in bytes (64 KB).</summary>
     public const int DefaultMaxBodySize = 64 * 1024;
 
-    // 256-entry lookup table for valid RFC 9110 token characters (!#$%&'*+-.^_`|~0-9A-Za-z)
-    private static ReadOnlySpan<byte> ValidHeaderNameChars =>
-    [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
+    // SIMD-vectorized SearchValues<byte> for RFC 9110 tchar validation and bare CR/LF detection
+    private static readonly SearchValues<byte> s_validHeaderNameBytes =
+        SearchValues.Create("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"u8);
+
+    private static readonly SearchValues<byte> s_bareCrOrLfBytes =
+        SearchValues.Create("\r\n"u8);
 
     /// <summary>
     /// Attempts to parse an HTTP/1.1 request from <paramref name="input"/> with zero heap allocations.
@@ -263,40 +251,15 @@ public static class HttpParser
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ContainsBareCrOrLf(scoped ReadOnlySpan<byte> line) =>
-        line.IndexOf((byte)'\r') >= 0 || line.IndexOf((byte)'\n') >= 0;
+        line.ContainsAny(s_bareCrOrLfBytes);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsValidHeaderName(scoped ReadOnlySpan<byte> name)
-    {
-        ReadOnlySpan<byte> table = ValidHeaderNameChars;
-        for (int i = 0; i < name.Length; i++)
-        {
-            if (table[name[i]] == 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private static bool IsValidHeaderName(scoped ReadOnlySpan<byte> name) =>
+        !name.IsEmpty && !name.ContainsAnyExcept(s_validHeaderNameBytes);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ReadOnlySpan<byte> TrimAsciiWhitespace(ReadOnlySpan<byte> span)
-    {
-        int start = 0;
-        while (start < span.Length && (span[start] == (byte)' ' || span[start] == (byte)'\t'))
-        {
-            start++;
-        }
-
-        int end = span.Length - 1;
-        while (end >= start && (span[end] == (byte)' ' || span[end] == (byte)'\t'))
-        {
-            end--;
-        }
-
-        return span.Slice(start, end - start + 1);
-    }
+    private static ReadOnlySpan<byte> TrimAsciiWhitespace(ReadOnlySpan<byte> span) =>
+        span.Trim(" \t"u8);
 
     private static HttpParseError InspectSecuritySensitiveHeader(
         scoped ReadOnlySpan<byte> name,

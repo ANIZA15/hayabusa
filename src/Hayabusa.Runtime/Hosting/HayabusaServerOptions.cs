@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Microsoft.Extensions.Logging;
 
 namespace Hayabusa.Runtime.Hosting;
 
@@ -26,6 +27,9 @@ public sealed class HayabusaServerOptions
 
     /// <summary>Gets or sets the I/O transport backend mode (<c>"auto"</c>, <c>"io_uring"</c>, <c>"socket"</c>, or <c>"inmemory"</c>).</summary>
     public string Transport { get; set; } = "auto";
+
+    /// <summary>Gets or sets an optional ZLogger-compatible <see cref="ILogger"/> for structured logging.</summary>
+    public ILogger? Logger { get; set; }
 
     /// <summary>Gets the resolved positive worker count (using <see cref="Environment.ProcessorCount"/> when <see cref="WorkerThreads"/> &lt;= 0).</summary>
     public int ResolvedWorkerCount => WorkerThreads > 0 ? WorkerThreads : Math.Max(1, Environment.ProcessorCount);

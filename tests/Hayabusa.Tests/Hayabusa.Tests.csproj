@@ -21,6 +21,9 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="R3" />
+    <PackageReference Include="UniTask" />
+    <PackageReference Include="ZLogger" />
+    <PackageReference Include="ZString" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>

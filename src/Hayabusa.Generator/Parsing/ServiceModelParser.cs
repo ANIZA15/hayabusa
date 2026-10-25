@@ -272,6 +272,16 @@ internal static class ServiceModelParser
             return true;
         }
 
+        if (type is IArrayTypeSymbol arrayType)
+        {
+            return IsMemoryPackCompatible(arrayType.ElementType);
+        }
+
+        if (type is INamedTypeSymbol { IsTupleType: true } tupleType)
+        {
+            return AreAllTypeArgumentsCompatible(tupleType.TupleElements);
+        }
+
         ImmutableArray<AttributeData> attrs = type.GetAttributes();
         for (int i = 0; i < attrs.Length; i++)
         {
@@ -284,6 +294,19 @@ internal static class ServiceModelParser
         return false;
     }
 
+    private static bool AreAllTypeArgumentsCompatible(ImmutableArray<IFieldSymbol> tupleElements)
+    {
+        for (int i = 0; i < tupleElements.Length; i++)
+        {
+            if (!IsMemoryPackCompatible(tupleElements[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool IsMemoryPackAttribute(INamedTypeSymbol? attrClass)
     {
         if (attrClass is null)
@@ -291,7 +314,8 @@ internal static class ServiceModelParser
             return false;
         }
 
-        return attrClass.Name == "MemoryPackableAttribute" || attrClass.ToDisplayString() == MemoryPackableFullName;
+        return attrClass.Name is "MemoryPackableAttribute" or "GenerateTypeScriptAttribute"
+               || attrClass.ToDisplayString() == MemoryPackableFullName;
     }
 
     private static void TryAddHttpRoute(
