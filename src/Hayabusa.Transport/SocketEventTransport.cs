@@ -24,12 +24,13 @@ public sealed class SocketEventTransport : ITransportBackend
 
     private readonly PinnedSlabPool _slabPool;
     private readonly ConcurrentQueue<TransportCompletionEvent> _completions = new();
+    private readonly ConcurrentQueue<ClientSession> _pendingRearmQueue = new();
     private readonly ConcurrentDictionary<ConnectionId, ClientSession> _sessions = new();
     private readonly ConcurrentBag<SocketAsyncEventArgs> _receiveEventArgsPool = new();
     private readonly List<Socket> _listenerSockets = new(2);
     private readonly List<SocketAsyncEventArgs> _acceptEventArgs = new(2);
     private readonly ManualResetEventSlim _wakeSignal = new(false);
-    private ulong _nextConnectionSequence;
+    private static ulong _globalConnectionSequence;
     private bool _disposed;
 
     /// <summary>
@@ -91,7 +92,7 @@ public sealed class SocketEventTransport : ITransportBackend
             destination[count++] = ev;
             if (ev.Operation == TransportOperationKind.Receive && _sessions.TryGetValue(ev.ConnectionId, out ClientSession? session))
             {
-                session.MarkArmedForNextReceive();
+                ScheduleReceiveRearm(session);
             }
         }
 
@@ -259,7 +260,7 @@ public sealed class SocketEventTransport : ITransportBackend
 
         Socket client = e.AcceptSocket;
         client.NoDelay = true;
-        var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionSequence));
+        var id = new ConnectionId(Interlocked.Increment(ref _globalConnectionSequence));
         SocketAsyncEventArgs receiveArgs = RentReceiveEventArgs();
 
         var session = new ClientSession(id, client, receiveArgs, ReturnReceiveEventArgs);
@@ -269,9 +270,18 @@ public sealed class SocketEventTransport : ITransportBackend
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ScheduleReceiveRearm(ClientSession session)
+    {
+        if (session.MarkArmedForNextReceive())
+        {
+            _pendingRearmQueue.Enqueue(session);
+        }
+    }
+
     private void RearmPendingReceives()
     {
-        foreach (ClientSession session in _sessions.Values)
+        while (_pendingRearmQueue.TryDequeue(out ClientSession? session))
         {
             if (session.ConsumeNeedsRearm())
             {
@@ -286,34 +296,39 @@ public sealed class SocketEventTransport : ITransportBackend
         {
             if (!_slabPool.TryRentSlot(out int slot, out uint gen))
             {
-                session.MarkArmedForNextReceive();
+                ScheduleReceiveRearm(session);
                 return;
             }
 
-            Memory<byte> memory = _slabPool.GetSlotMemory(slot, gen);
-            session.CurrentSlot = new SlabSlotToken(slot, gen);
-            session.ReceiveArgs.SetBuffer(memory);
-
-            try
-            {
-                if (session.Socket.ReceiveAsync(session.ReceiveArgs))
-                {
-                    return;
-                }
-            }
-            catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
-            {
-                _slabPool.ReturnSlot(slot, gen);
-                session.CurrentSlot = SlabSlotToken.None;
-                CloseConnection(session.Id);
-                return;
-            }
-
-            if (!CompleteReceiveSyncOrAsync(session, session.ReceiveArgs))
+            if (!IssueSingleReceiveOnSlot(session, slot, gen))
             {
                 return;
             }
         }
+    }
+
+    private bool IssueSingleReceiveOnSlot(ClientSession session, int slot, uint gen)
+    {
+        Memory<byte> memory = _slabPool.GetSlotMemory(slot, gen);
+        session.CurrentSlot = new SlabSlotToken(slot, gen);
+        session.ReceiveArgs.SetBuffer(memory);
+
+        try
+        {
+            if (session.Socket.ReceiveAsync(session.ReceiveArgs))
+            {
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            _slabPool.ReturnSlot(slot, gen);
+            session.CurrentSlot = SlabSlotToken.None;
+            CloseConnection(session.Id);
+            return false;
+        }
+
+        return CompleteReceiveSyncOrAsync(session, session.ReceiveArgs);
     }
 
     private void OnReceiveCompleted(object? sender, SocketAsyncEventArgs e)
@@ -464,7 +479,7 @@ public sealed class SocketEventTransport : ITransportBackend
         public bool IsClosed => Volatile.Read(ref _closed) != 0;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void MarkArmedForNextReceive() => Interlocked.Exchange(ref _needsRearm, 1);
+        public bool MarkArmedForNextReceive() => Interlocked.Exchange(ref _needsRearm, 1) == 0;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool ConsumeNeedsRearm() => Interlocked.Exchange(ref _needsRearm, 0) == 1;

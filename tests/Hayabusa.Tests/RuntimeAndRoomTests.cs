@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -385,6 +386,31 @@ public sealed class RuntimeAndRoomTests
 
         Assert.Equal(0, transport.SlabPool.OutstandingRentals);
         Assert.Single(transport.GetSentPayloads(connId));
+    }
+
+    [Fact]
+    public void CoreWorker_HighVolumeSequentialHttpKeepAliveRequests_SucceedsWithoutFalseRateLimitEvictionOrStaleBytes()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TimeProvider: fakeTime), transport, dispatcher);
+        var connId = new ConnectionId(303UL);
+        byte[] rawHttp = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8.ToArray();
+
+        transport.EnqueueAccept(connId);
+        for (int i = 0; i < 500; i++)
+        {
+            transport.TryEnqueueReceive(connId, rawHttp);
+            worker.StepIteration();
+        }
+
+        IReadOnlyList<byte[]> payloads = transport.GetSentPayloads(connId);
+        Assert.False(transport.IsDisconnected(connId));
+        Assert.Equal(500, payloads.Count);
+        Assert.Equal(payloads[0].Length, payloads[499].Length);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
     }
 
     private static void AddHundredPlayers(RoomActor room)
