@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Hayabusa.Core</AssemblyName>
+    <RootNamespace>Hayabusa.Core</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Core strongly-typed primitives, zero-allocation pinned slab pools, and completion-based I/O abstractions for Hayabusa.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MemoryPack" />
+    <PackageReference Include="ZString" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <PackageId>Hayabusa.Templates</PackageId>
+    <Title>Hayabusa Server Project Templates</Title>
+    <Description>Project templates for creating high-performance Hayabusa Web, MemoryPack RPC, and real-time RoomActor game servers via 'dotnet new hayabusa-server'.</Description>
+    <PackageTags>dotnet-new;templates;hayabusa;rpc;gameserver;memorypack;io_uring</PackageTags>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content\**\*" Exclude="content\**\bin\**;content\**\obj\**" />
+    <Compile Remove="**\*" />
+  </ItemGroup>
+</Project>

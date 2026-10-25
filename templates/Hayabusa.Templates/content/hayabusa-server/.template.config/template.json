@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Hayabusa Contributors",
+  "classifications": [ "Web", "RPC", "GameServer", "Hayabusa" ],
+  "identity": "Hayabusa.Server.Template.CSharp",
+  "name": "Hayabusa High-Performance Web/RPC & Game Server",
+  "shortName": "hayabusa-server",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "HayabusaServerTemplate",
+  "preferNameDirectory": true
+}

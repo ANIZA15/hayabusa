@@ -217,17 +217,17 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 
 ## Cysharp OSS の導入状況と統合計画
 
-現在 `Hayabusa` は **Phase 0（設計・規約策定フェーズ完了 / コード実装未着手）** であり、各 NuGet パッケージの実導入は **Phase 1 以降**で順次行います。
+`Hayabusa` は **Phase 0 〜 Phase 5 の全コア実装が完了** しており、`Directory.Packages.props` による中央パッケージ管理の下で以下の Cysharp OSS 群を統合しています。
 
-| OSS ライブラリ | 形態 | 現在の状態 | 導入予定フェーズ | `Hayabusa` での役割 | ライセンス |
+| OSS ライブラリ | 形態 | 現在の状態 | 導入フェーズ | `Hayabusa` での役割 | ライセンス |
 | --- | --- | --- | --- | --- | --- |
-| **[MemoryPack](https://github.com/Cysharp/MemoryPack)** | NuGet 導入 | 未導入（設計済） | **Phase 1** (`Hayabusa.Rpc`) | RPC ペイロードおよびゲーム状態スナップショットのゼロコピーシリアライズ | MIT License |
-| **[ZString](https://github.com/Cysharp/ZString)** | NuGet 導入 | 未導入（設計済） | **Phase 1** (`Hayabusa.Core` / `Rpc`) | UTF-8 文字列・HTTP ヘッダー構築のゼロアロケーション化 | MIT License |
-| **[ZLogger](https://github.com/Cysharp/ZLogger)** | NuGet 導入 | 未導入（設計済） | **Phase 1〜2** (`Hayabusa.Runtime`) | String Interpolation + UTF-8 直書きによるゼロアロケーション構造化ロギング | MIT License |
-| **[R3](https://github.com/Cysharp/R3)** | NuGet 導入 | 未導入（設計済） | **Phase 2** (`Hayabusa.Runtime`) | `DisposableBag` による購読ライフサイクル管理（イベントリーク防止）・リアクティブ制御 | MIT License |
-| **[UniTask](https://github.com/Cysharp/UniTask)** | NuGet / 思想統合 | 未導入（設計済） | **Phase 2** (`Hayabusa.Runtime`) | Thread-per-Core ループ上のゼロアロケーション非同期制御（標準 `ValueTask` / `IValueTaskSource` と併用） | MIT License |
-| **[LogicLooper](https://github.com/Cysharp/LogicLooper)** | アーキテクチャ統合 | 設計反映済 | **Phase 2** (`Hayabusa.Runtime`) | I/O イベントループと一体化した 60fps/30fps 定周期 Tick スケジューラの設計モデル | MIT License |
-| **[MagicOnion](https://github.com/Cysharp/MagicOnion)** | API 体験モデル | 設計反映済 | **Phase 1 & 3** (`Rpc` / `Generator`) | `[HayabusaService]` / `[Rpc]` による C# ファーストな RPC 開発体験のモデル（通信層は独自実装） | MIT License |
+| **[MemoryPack](https://github.com/Cysharp/MemoryPack)** | NuGet 導入 | **導入・実装済** | **Phase 1** (`Hayabusa.Core` / `Rpc`) | RPC ペイロードおよびゲーム状態スナップショットのゼロコピーシリアライズ | MIT License |
+| **[ZString](https://github.com/Cysharp/ZString)** | NuGet 導入 | **導入・実装済** | **Phase 1** (`Hayabusa.Core` / `Rpc`) | UTF-8 文字列・HTTP ヘッダー構築のゼロアロケーション化 | MIT License |
+| **[ZLogger](https://github.com/Cysharp/ZLogger)** | NuGet 導入 | **導入・実装済** | **Phase 1〜2** (`Hayabusa.Transport` / `Runtime`) | String Interpolation + UTF-8 直書きによるゼロアロケーション構造化ロギング | MIT License |
+| **[R3](https://github.com/Cysharp/R3)** | NuGet 導入 | **導入・実装済** | **Phase 2** (`Hayabusa.Runtime`) | `DisposableBag` による購読ライフサイクル管理（イベントリーク防止）・リアクティブ制御 | MIT License |
+| **[UniTask](https://github.com/Cysharp/UniTask)** | NuGet / 思想統合 | **導入・実装済** | **Phase 2** (`Hayabusa.Runtime`) | Thread-per-Core ループ上のゼロアロケーション非同期制御（標準 `ValueTask` / `IValueTaskSource` と併用） | MIT License |
+| **[LogicLooper](https://github.com/Cysharp/LogicLooper)** | アーキテクチャ統合 | **実装済** | **Phase 2** (`Hayabusa.Runtime`) | I/O イベントループと一体化した 60fps/30fps 定周期 Tick スケジューラ（`LogicTickScheduler`） | MIT License |
+| **[MagicOnion](https://github.com/Cysharp/MagicOnion)** | API 体験モデル | **実装済** | **Phase 1 & 3** (`Rpc` / `Generator`) | `[HayabusaService]` / `[Rpc]` による C# ファーストな RPC 開発体験のモデル（通信層は独自実装） | MIT License |
 
 ---
 
@@ -254,18 +254,18 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 ## 実装ロードマップ
 
 - [x] **Phase 0: 設計方針策定 & Skills / アーキテクチャ規約整備**
-- [ ] **Phase 1: `Hayabusa.Core` & `Hayabusa.Rpc` コア基盤実装**
+- [x] **Phase 1: `Hayabusa.Core` & `Hayabusa.Rpc` コア基盤実装**
   - 強い型プリミティブ（`ConnectionId`, `RoomId`, `MethodId`, `TickNumber`, `CoreIndex`）
   - Thread-Local Slab Pool / Pinned RingBuffer & リーク検知機構
   - MemoryPack RPC フレームパーサ & 最小 HTTP パーサ（単体テスト & ペネトレーションテスト含む）
-- [ ] **Phase 2: `Hayabusa.Runtime`（Thread-per-Core + LogicLooper 風 Tick + Room Actor）実装**
+- [x] **Phase 2: `Hayabusa.Runtime`（Thread-per-Core + LogicLooper 風 Tick + Room Actor）実装**
   - コア固定ワーカースレッド、ロックフリー MPSC Mailbox、Timing Wheel タイムアウト管理
   - `RoomActor` 基底クラスと定周期 Tick スケジューラ
-- [ ] **Phase 3: `Hayabusa.Generator`（C# Incremental Source Generator）実装**
+- [x] **Phase 3: `Hayabusa.Generator`（C# Incremental Source Generator）実装**
   - `[HayabusaService]` / `[Rpc]` / `[Get]` / `[Post]` からのゼロアロケーションディスパッチャ & クライアント自動生成
-- [ ] **Phase 4: `Hayabusa.Transport`（Linux `io_uring` & Cross-Platform Socket IOCP）実装**
+- [x] **Phase 4: `Hayabusa.Transport`（Linux `io_uring` & Cross-Platform Socket IOCP）実装**
   - Completion トランスポート層とバッチ Submit パイプライン
-- [ ] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
+- [x] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
   - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
 
 ---

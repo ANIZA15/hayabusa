@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Hayabusa.Benchmarks</AssemblyName>
+    <RootNamespace>Hayabusa.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>BenchmarkDotNet suite for Hayabusa verifying zero-allocation hot paths and throughput vs Kestrel/gRPC baselines.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Hayabusa.Core\Hayabusa.Core.csproj" />
+    <ProjectReference Include="..\..\src\Hayabusa.Rpc\Hayabusa.Rpc.csproj" />
+    <ProjectReference Include="..\..\src\Hayabusa.Transport\Hayabusa.Transport.csproj" />
+    <ProjectReference Include="..\..\src\Hayabusa.Runtime\Hayabusa.Runtime.csproj" />
+    <ProjectReference Include="..\..\samples\Hayabusa.SampleServer\Hayabusa.SampleServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="MemoryPack" />
+  </ItemGroup>
+</Project>
