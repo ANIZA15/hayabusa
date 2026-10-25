@@ -59,8 +59,8 @@ ENV HAYABUSA_ROLE="both" \
     DOTNET_ServerGC="1" \
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT="1"
 
-EXPOSE 5000/tcp
-EXPOSE 5001/tcp
+EXPOSE 8000/tcp
+EXPOSE 8001/tcp
 
 USER ubuntu
 ENTRYPOINT ["dotnet", "Hayabusa.SampleServer.dll"]
