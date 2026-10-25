@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Hayabusa.Rpc</AssemblyName>
+    <RootNamespace>Hayabusa.Rpc</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Zero-allocation MemoryPack RPC framing, minimal HTTP parser, and routing primitives for Hayabusa.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hayabusa.Core\Hayabusa.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MemoryPack" />
+    <PackageReference Include="ZString" />
+  </ItemGroup>
+</Project>

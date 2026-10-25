@@ -32,3 +32,33 @@ dotnet_diagnostic.CA1062.severity = error
 dotnet_diagnostic.CA2000.severity = error
 dotnet_diagnostic.CA1816.severity = error
 dotnet_diagnostic.CA2012.severity = error
+
+# Thread-per-Core Architecture: Never escape to ThreadPool via ConfigureAwait(false) (Thread-per-Core Skill §1)
+dotnet_diagnostic.CA2007.severity = none
+
+# Unsigned primitives (ulong ConnectionId/RoomId/TickNumber) are intentional (Strict Typing Skill §2)
+dotnet_diagnostic.CA1014.severity = none
+
+# Exception messages are invariant English strings
+dotnet_diagnostic.CA1303.severity = none
+
+# Allow *Impl / *Flags / *Collection / *Queue / *Stream / *Ex naming where architecturally appropriate
+dotnet_diagnostic.CA1711.severity = none
+dotnet_diagnostic.CA1034.severity = none
+
+# Compact byte-backed enums (e.g. FrameParseError : byte) and Result<T, E>.Success static factories (Strict Typing Skill §3.2)
+dotnet_diagnostic.CA1028.severity = none
+dotnet_diagnostic.CA1000.severity = none
+dotnet_diagnostic.CA1019.severity = none
+dotnet_diagnostic.CA1515.severity = none
+
+
+
+
+[tests/**/*.cs]
+# Unit testing naming convention: MethodName_Condition_ExpectedBehavior (Unit Testing Skill §1)
+dotnet_diagnostic.CA1707.severity = none
+# Deterministic seeded Random is required for Structure-Aware Fuzzing (Penetration Testing Skill §2.2)
+dotnet_diagnostic.CA5394.severity = none
+
+
