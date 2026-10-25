@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text;
 using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
@@ -71,14 +72,16 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
     {
         var invalid = new CoreIndex(-1);
         var zero = CoreIndex.Zero;
+        var zeroCopy = CoreIndex.Zero;
         var two = new CoreIndex(2);
+        var twoCopy = new CoreIndex(2);
 
         Assert.False(invalid.IsValid);
         Assert.True(zero.IsValid);
         Assert.True(zero < two);
-        Assert.True(zero <= zero);
+        Assert.True(zero <= zeroCopy);
         Assert.True(two > zero);
-        Assert.True(two >= two);
+        Assert.True(two >= twoCopy);
         Assert.True(zero.CompareTo(two) < 0);
         Assert.Equal("core:2", two.ToString(null, null));
     }
@@ -87,13 +90,15 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
     public void TickNumber_AdvanceAndComparisons_BehaveDeterministically()
     {
         TickNumber start = TickNumber.Zero;
+        TickNumber startCopy = TickNumber.Zero;
         TickNumber advanced = start.Advance(25UL);
+        var advancedCopy = new TickNumber(25UL);
 
-        Assert.Equal(new TickNumber(25UL), advanced);
+        Assert.Equal(advancedCopy, advanced);
         Assert.True(start < advanced);
-        Assert.True(start <= start);
+        Assert.True(start <= startCopy);
         Assert.True(advanced > start);
-        Assert.True(advanced >= advanced);
+        Assert.True(advanced >= advancedCopy);
         Assert.True(start.CompareTo(advanced) < 0);
         Assert.Equal("tick:25", advanced.ToString(null, null));
     }
@@ -109,16 +114,16 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
         Span<char> tinyChars = stackalloc char[4];
         Span<byte> tinyUtf8 = stackalloc byte[4];
 
-        Assert.False(connId.TryFormat(tinyChars, out _));
-        Assert.False(connId.TryFormat(tinyUtf8, out _));
-        Assert.False(roomId.TryFormat(tinyChars, out _));
-        Assert.False(roomId.TryFormat(tinyUtf8, out _));
-        Assert.False(methodId.TryFormat(tinyChars, out _));
-        Assert.False(methodId.TryFormat(tinyUtf8, out _));
-        Assert.False(coreIndex.TryFormat(tinyChars, out _));
-        Assert.False(coreIndex.TryFormat(tinyUtf8, out _));
-        Assert.False(tick.TryFormat(tinyChars, out _));
-        Assert.False(tick.TryFormat(tinyUtf8, out _));
+        Assert.False(connId.TryFormat(tinyChars, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(connId.TryFormat(tinyUtf8, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(roomId.TryFormat(tinyChars, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(roomId.TryFormat(tinyUtf8, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(methodId.TryFormat(tinyChars, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(methodId.TryFormat(tinyUtf8, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(coreIndex.TryFormat(tinyChars, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(coreIndex.TryFormat(tinyUtf8, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(tick.TryFormat(tinyChars, out _, default, CultureInfo.InvariantCulture));
+        Assert.False(tick.TryFormat(tinyUtf8, out _, default, CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -126,19 +131,19 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
     {
         Span<char> chars = stackalloc char[32];
 
-        Assert.True(new ConnectionId(9UL).TryFormat(chars, out int cLen));
+        Assert.True(new ConnectionId(9UL).TryFormat(chars, out int cLen, default, CultureInfo.InvariantCulture));
         Assert.Equal("conn:9", new string(chars.Slice(0, cLen)));
 
-        Assert.True(new RoomId(8UL).TryFormat(chars, out int rLen));
+        Assert.True(new RoomId(8UL).TryFormat(chars, out int rLen, default, CultureInfo.InvariantCulture));
         Assert.Equal("room:8", new string(chars.Slice(0, rLen)));
 
-        Assert.True(new MethodId(7).TryFormat(chars, out int mLen));
+        Assert.True(new MethodId(7).TryFormat(chars, out int mLen, default, CultureInfo.InvariantCulture));
         Assert.Equal("method:7", new string(chars.Slice(0, mLen)));
 
-        Assert.True(new CoreIndex(6).TryFormat(chars, out int coreLen));
+        Assert.True(new CoreIndex(6).TryFormat(chars, out int coreLen, default, CultureInfo.InvariantCulture));
         Assert.Equal("core:6", new string(chars.Slice(0, coreLen)));
 
-        Assert.True(new TickNumber(5UL).TryFormat(chars, out int tLen));
+        Assert.True(new TickNumber(5UL).TryFormat(chars, out int tLen, default, CultureInfo.InvariantCulture));
         Assert.Equal("tick:5", new string(chars.Slice(0, tLen)));
     }
 
@@ -198,8 +203,9 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
         // Appending 5 bytes requires automatic compaction of the remaining 2 bytes ([5, 6]) to index 0
         Assert.True(buffer.TryAppend([7, 8, 9, 10, 11]));
         Assert.Equal(7, buffer.ReadableBytes);
-        Assert.True(buffer.ReadableSpan.SequenceEqual([5, 6, 7, 8, 9, 10, 11]));
-        Assert.True(buffer.ReadableMemory.Span.SequenceEqual([5, 6, 7, 8, 9, 10, 11]));
+        ReadOnlySpan<byte> expectedCompacted = [5, 6, 7, 8, 9, 10, 11];
+        Assert.True(buffer.ReadableSpan.SequenceEqual(expectedCompacted));
+        Assert.True(buffer.ReadableMemory.Span.SequenceEqual(expectedCompacted));
 
         // Exceeding capacity returns false without corrupting unread bytes
         Assert.False(buffer.TryAppend([12, 13]));
@@ -249,14 +255,16 @@ public sealed class CoreBuffersAndPrimitivesExtendedTests
         ScopedSlabRental r2 = pool.RentScoped(64);
         r1.Memory.Span[0] = 0x42;
         Assert.Equal(0x42, r1.Span[0]);
-        Assert.True(r1.SlotIndex >= 0);
-        Assert.True(r1.Generation > 0);
+        int r1Slot = r1.SlotIndex;
+        uint r1Gen = r1.Generation;
+        Assert.True(r1Slot >= 0);
+        Assert.True(r1Gen > 0);
 
         Assert.False(pool.TryRentSlot(out _, out _));
         Assert.Throws<InvalidOperationException>(() => pool.RentScoped(64));
         Assert.Throws<ArgumentOutOfRangeException>(() => pool.ReturnSlot(-1, 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => pool.ReturnSlot(99, 1));
-        Assert.Throws<InvalidOperationException>(() => pool.ReturnSlot(r1.SlotIndex, r1.Generation + 99));
+        Assert.Throws<InvalidOperationException>(() => pool.ReturnSlot(r1Slot, r1Gen + 99));
 
         pool.ResetArena();
         Assert.Equal(0, pool.OutstandingRentals);

@@ -144,7 +144,7 @@ public sealed class RuntimeHostingAndConcurrencyExtendedTests
     }
 
     [Fact]
-    public async Task SingleThreadSynchronizationContext_SendPostAndDrain_PreserveOwnerThreadAffinity()
+    public void SingleThreadSynchronizationContext_SendPostAndDrain_PreserveOwnerThreadAffinity()
     {
         var syncCtx = new SingleThreadSynchronizationContext(new CoreIndex(1), Environment.CurrentManagedThreadId);
         Assert.Equal(new CoreIndex(1), syncCtx.CoreIndex);
@@ -158,12 +158,16 @@ public sealed class RuntimeHostingAndConcurrencyExtendedTests
 
         // Post and cross-thread Send enqueue into the work queue
         syncCtx.Post(_ => counter += 5, null);
-        await Task.Run(() =>
+        bool observedNonOwnerThread = false;
+        var backgroundThread = new Thread(() =>
         {
-            Assert.False(syncCtx.IsOnOwnerThread);
+            observedNonOwnerThread = !syncCtx.IsOnOwnerThread;
             syncCtx.Send(_ => counter += 20, null);
         });
+        backgroundThread.Start();
+        backgroundThread.Join();
 
+        Assert.True(observedNonOwnerThread);
         Assert.Equal(10, counter);
         Assert.Equal(1, syncCtx.DrainContinuations(maxItems: 1));
         Assert.Equal(15, counter);

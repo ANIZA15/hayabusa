@@ -29,7 +29,7 @@ public sealed class SocketEventTransport : ITransportBackend
     private readonly ConcurrentBag<SocketAsyncEventArgs> _receiveEventArgsPool = new();
     private readonly List<Socket> _listenerSockets = new(2);
     private readonly List<SocketAsyncEventArgs> _acceptEventArgs = new(2);
-    private readonly ManualResetEventSlim _wakeSignal = new(false);
+    private readonly ManualResetEventSlim _wakeSignal = new(false, spinCount: 1024);
     private static ulong _globalConnectionSequence;
     private bool _disposed;
 
@@ -103,12 +103,12 @@ public sealed class SocketEventTransport : ITransportBackend
     public int SubmitAndWait(ReadOnlySpan<TransportSubmissionEntry> submissions, TimeSpan timeout)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        RearmPendingReceives();
+
         for (int i = 0; i < submissions.Length; i++)
         {
             ExecuteSubmission(in submissions[i]);
         }
-
-        RearmPendingReceives();
 
         if (_completions.IsEmpty && timeout > TimeSpan.Zero)
         {
@@ -428,10 +428,7 @@ public sealed class SocketEventTransport : ITransportBackend
     private void EnqueueCompletionAndWake(in TransportCompletionEvent ev)
     {
         _completions.Enqueue(ev);
-        if (!_wakeSignal.IsSet)
-        {
-            _wakeSignal.Set();
-        }
+        _wakeSignal.Set();
     }
 
     private void WaitWithDeadline(TimeSpan timeout)
