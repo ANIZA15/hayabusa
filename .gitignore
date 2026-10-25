@@ -32,3 +32,5 @@ coverage*.info
 # OS
 .DS_Store
 Thumbs.db
+
+*.env
