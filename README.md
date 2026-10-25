@@ -243,8 +243,8 @@ hayabusa/
 ├── benchmarks/
 │   └── Hayabusa.Benchmarks/         # BenchmarkDotNet スイート (Kestrel / JSON / Task 比較・0B アロケーション検証)
 └── tests/
-    ├── Hayabusa.Tests/              # 単体テスト・Source Generator テスト・ゼロリーク検証 (33件)
-    └── Hayabusa.PenetrationTests/   # 悪意あるペイロード・Length Bomb・Slowloris・ファジング検証 (20件)
+    ├── Hayabusa.Tests/              # 単体テスト・Source Generator テスト・ゼロリーク検証 (72件)
+    └── Hayabusa.PenetrationTests/   # 悪意あるペイロード・Length Bomb・Slowloris・ファジング検証 (30件)
 ```
 
 ---

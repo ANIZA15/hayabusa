@@ -234,6 +234,94 @@ public sealed class SecurityAndFuzzingTests
         Assert.Equal(0, transport.SlabPool.OutstandingRentals);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    [InlineData(99)]
+    [InlineData(255)]
+    public void FrameParser_WithUnsupportedProtocolVersion_RejectsWithZeroAllocation(byte badVersion)
+    {
+        byte[] frame = [0x48, 0x59, 0x00, 0x00, 0x00, 0x00, badVersion, 0x00, 0x01, 0x00, 0x00, 0x00];
+        _ = FrameParser.TryParse(frame, 1024, out _);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        FrameParseError error = FrameParser.TryParse(frame, 1024, out _);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(FrameParseError.UnsupportedProtocolVersion, error);
+        Assert.Equal(0L, after - before);
+    }
+
+    [Theory]
+    [InlineData("GET /test\0evil HTTP/1.1\r\nHost: a\r\n\r\n", HttpParseError.MalformedHeader)]
+    [InlineData("POST / HTTP/1.1\r\nHost: a\r\nContent-Length: -5\r\n\r\n", HttpParseError.PayloadTooLarge)]
+    [InlineData("POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 99999999\r\n\r\n", HttpParseError.PayloadTooLarge)]
+    [InlineData("GET / HTTP/2.0\r\nHost: a\r\n\r\n", HttpParseError.InvalidRequestLine)]
+    public void HttpParser_NullBytesNegativeOrHugeContentLengthAndUnsupportedVersion_RejectsWithZeroAllocation(
+        string rawRequest,
+        HttpParseError expectedError)
+    {
+        byte[] bytes = Encoding.ASCII.GetBytes(rawRequest);
+        _ = HttpParser.TryParseRequest(bytes, out _);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        HttpParseError actual = HttpParser.TryParseRequest(bytes, out _);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(expectedError, actual);
+        Assert.Equal(0L, after - before);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenAttackerOverflowsPerConnectionReceiveBuffer_EvictsAttackerAndPreservesLegitimatePlayer()
+    {
+        using var pool = new PinnedSlabPool(1024, 16);
+        using var transport = new InMemoryTransport(pool);
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, MaxFrameSize: 128), transport, dispatcher);
+        BattleRoomService room = worker.RoomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+        dispatcher.RegisterService(room);
+
+        var legitConn = new ConnectionId(10UL);
+        var attackerConn = new ConnectionId(99UL);
+        room.JoinPlayer(legitConn);
+        transport.EnqueueAccept(legitConn);
+        transport.EnqueueAccept(attackerConn);
+
+        // MaxFrameSize is 128 -> receive buffer capacity is 256. Send 300 bytes to overflow attacker's buffer.
+        byte[] overflowChunk = new byte[300];
+        overflowChunk[0] = 0x48;
+        overflowChunk[1] = 0x59;
+        transport.TryEnqueueReceive(attackerConn, overflowChunk);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(attackerConn));
+        Assert.False(transport.IsDisconnected(legitConn));
+        Assert.Equal(1, room.PlayerCount);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    [Fact]
+    public void HttpRpcTunnel_UnderMaliciousLengthBombBody_Returns400BadRequestWithoutCrashing()
+    {
+        using var responseWriter = new PooledBufferWriter(1024);
+        var context = new HayabusaContext(CoreIndex.Zero, responseWriter);
+        var dispatcher = new RpcDispatcher();
+
+        byte[] bombBody = [0x48, 0x59, 0xFF, 0xFF, 0xFF, 0x7F, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00];
+        byte[] header = "POST /rpc HTTP/1.1\r\nHost: localhost\r\nContent-Length: 12\r\n\r\n"u8.ToArray();
+        byte[] rawHttp = new byte[header.Length + bombBody.Length];
+        header.CopyTo(rawHttp, 0);
+        bombBody.CopyTo(rawHttp, header.Length);
+
+        HttpParseError parseErr = HttpParser.TryParseRequest(rawHttp, out HttpRequestView req);
+        bool handled = dispatcher.DispatchHttp(context, in req, responseWriter);
+
+        Assert.Equal(HttpParseError.None, parseErr);
+        Assert.True(handled);
+        Assert.True(responseWriter.WrittenSpan.StartsWith("HTTP/1.1 400 Bad Request"u8));
+    }
+
     private static void RunTenThousandConnectDisconnectCycles(InMemoryTransport transport, CoreWorker worker)
     {
         ReadOnlySpan<byte> badFrame = [0x48, 0x59, 0xFF, 0xFF, 0xFF, 0x7F];

@@ -177,6 +177,51 @@ public sealed class FrameAndHttpParserTests
         Assert.Equal(0L, after - before);
     }
 
+    [Theory]
+    [InlineData("GET /api HTTP/1.1\r\nHost: a\r\n\r\n", HttpMethodKind.Get)]
+    [InlineData("POST /api HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n", HttpMethodKind.Post)]
+    [InlineData("PUT /api HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n", HttpMethodKind.Put)]
+    [InlineData("DELETE /api HTTP/1.1\r\nHost: a\r\n\r\n", HttpMethodKind.Delete)]
+    [InlineData("HEAD /api HTTP/1.1\r\nHost: a\r\n\r\n", HttpMethodKind.Head)]
+    [InlineData("OPTIONS /api HTTP/1.1\r\nHost: a\r\n\r\n", HttpMethodKind.Options)]
+    public void HttpParser_AllSupportedHttpVerbs_ParseToExpectedMethodKindWithZeroAllocation(
+        string rawRequest,
+        HttpMethodKind expectedMethod)
+    {
+        byte[] bytes = System.Text.Encoding.ASCII.GetBytes(rawRequest);
+        _ = HttpParser.TryParseRequest(bytes, out _);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        HttpParseError err = HttpParser.TryParseRequest(bytes, out HttpRequestView req);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(HttpParseError.None, err);
+        Assert.Equal(expectedMethod, req.Method);
+        Assert.Equal(0L, after - before);
+    }
+
+    [Fact]
+    public void HttpResponseWriter_JsonAndMemoryPackAndFormattedResponses_WriteValidHeadersWithZeroAllocation()
+    {
+        using var writer = new PooledBufferWriter(1024);
+        PooledBufferWriter w = writer;
+
+        // Warmup
+        HttpResponseWriter.WriteOkJsonUtf8(ref w, """{"ok":true}"""u8);
+        writer.Clear();
+        HttpResponseWriter.WriteOkMemoryPack(ref w, [1, 2, 3, 4]);
+        writer.Clear();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        HttpResponseWriter.WriteOkJsonUtf8(ref w, """{"ok":true}"""u8);
+        writer.Clear();
+        HttpResponseWriter.WriteOkMemoryPack(ref w, [1, 2, 3, 4]);
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.True(writer.WrittenSpan.StartsWith("HTTP/1.1 200 OK\r\nContent-Type: application/x-memorypack"u8));
+        Assert.Equal(0L, after - before);
+    }
+
     private static void FeedAllExceptLastByte(ContiguousReceiveBuffer buffer, ReadOnlySpan<byte> frame)
     {
         for (int i = 0; i < frame.Length - 1; i++)

@@ -461,6 +461,179 @@ public sealed class RuntimeAndRoomTests
         Assert.True(responseWriter.WrittenSpan.StartsWith("HTTP/1.1 200 OK\r\nContent-Type: application/x-memorypack"u8));
     }
 
+    [Fact]
+    public async Task MpscMailbox_MultiProducerConcurrentStress_DeliversAll800MessagesWithoutLoss()
+    {
+        var mailbox = new MpscMailbox<int>(1024);
+        var producers = new Task[4];
+        for (int p = 0; p < 4; p++)
+        {
+            int producerIndex = p;
+            producers[p] = Task.Run(() => EnqueueRange(mailbox, producerIndex * 200, 200));
+        }
+
+        await Task.WhenAll(producers);
+
+        int count = 0;
+        long sum = 0;
+        while (mailbox.TryDequeue(out int val))
+        {
+            count++;
+            sum += val;
+        }
+
+        // Sum of 0..799 = 799 * 800 / 2 = 319,600
+        Assert.Equal(800, count);
+        Assert.Equal(319_600L, sum);
+    }
+
+    [Fact]
+    public void MpscMailbox_WhenRingIsFull_TryEnqueueReturnsFalseAndRecoversAfterDequeue()
+    {
+        var mailbox = new MpscMailbox<int>(16);
+        for (int i = 0; i < 16; i++)
+        {
+            Assert.True(mailbox.TryEnqueue(i));
+        }
+
+        Assert.False(mailbox.TryEnqueue(999));
+        Assert.True(mailbox.TryDequeue(out int first));
+        Assert.Equal(0, first);
+        Assert.True(mailbox.TryEnqueue(999));
+    }
+
+    [Fact]
+    public async Task SingleThreadSynchronizationContext_CrossThreadPostAndSend_ExecutesOnOwnerThreadUponDrain()
+    {
+        var syncCtx = new SingleThreadSynchronizationContext(new CoreIndex(1), Environment.CurrentManagedThreadId);
+        int executedThreadId = -1;
+
+        await Task.Run(() => syncCtx.Post(_ => executedThreadId = Environment.CurrentManagedThreadId, null));
+
+        Assert.Equal(-1, executedThreadId);
+        int drainThreadId = Environment.CurrentManagedThreadId;
+        int drained = syncCtx.DrainContinuations();
+        Assert.Equal(1, drained);
+        Assert.Equal(drainThreadId, executedThreadId);
+    }
+
+    [Fact]
+    public void TimingWheel_IdleAndActiveConnections_EvictsOnlyExpiredConnections()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var wheel = new Hayabusa.Runtime.Timing.TimingWheel(
+            fakeTime,
+            idleTimeout: TimeSpan.FromSeconds(10),
+            frameReadTimeout: TimeSpan.FromSeconds(3));
+
+        var idleConn = new ConnectionId(1UL);
+        var activeConn = new ConnectionId(2UL);
+        wheel.TouchCompleteFrame(idleConn);
+        wheel.TouchCompleteFrame(activeConn);
+
+        fakeTime.Advance(TimeSpan.FromSeconds(6));
+        wheel.TouchCompleteFrame(activeConn);
+        fakeTime.Advance(TimeSpan.FromSeconds(5));
+
+        Span<ConnectionId> expired = stackalloc ConnectionId[4];
+        int evicted = wheel.SweepExpired(expired);
+
+        Assert.Equal(1, evicted);
+        Assert.Equal(idleConn, expired[0]);
+        Assert.Equal(1, wheel.TrackedCount);
+    }
+
+    [Fact]
+    public void ConnectionRateLimiter_InFlightBackpressureAndTokenRefill_EnforcesAndRecoversDeterministically()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var limiter = new Hayabusa.Runtime.Security.ConnectionRateLimiter(
+            fakeTime,
+            maxBurstTokens: 4,
+            refillTokensPerSecond: 2.0,
+            maxInFlightRequests: 2);
+        var conn = new ConnectionId(10UL);
+
+        Assert.True(limiter.TryAcquire(conn, tokenCost: 1.0));
+        Assert.True(limiter.TryAcquire(conn, tokenCost: 1.0));
+        // Exceeds maxInFlightRequests (2) even though 2 tokens remain
+        Assert.False(limiter.TryAcquire(conn, tokenCost: 1.0));
+
+        limiter.ReleaseInFlight(conn);
+        Assert.True(limiter.TryAcquire(conn, tokenCost: 2.0));
+        // Now tokens == 0
+        limiter.ReleaseInFlight(conn);
+        Assert.False(limiter.TryAcquire(conn, tokenCost: 1.0));
+
+        // Advance 1 second -> refills 2 tokens
+        fakeTime.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(limiter.TryAcquire(conn, tokenCost: 2.0));
+    }
+
+    [Fact]
+    public void RoomManager_ThousandCreateTickBroadcastAndDestroyCycles_LeavesZeroLeak()
+    {
+        using var writer = new PooledBufferWriter(4096);
+        var context = new HayabusaContext(CoreIndex.Zero, writer);
+        var sq = new TransportSubmissionQueue(256);
+        using var roomManager = new RoomManager(CoreIndex.Zero, context, sq);
+
+        RunThousandRoomLifecycleCycles(roomManager, sq);
+
+        Assert.Equal(0, roomManager.ActiveCount);
+        Assert.Equal(0, sq.Count);
+    }
+
+    [Fact]
+    public void HayabusaRpcClient_BroadcastSubscriptionDispose_UnregistersCallbackCleanly()
+    {
+        var dispatcher = new RpcDispatcher();
+        using var client = Hayabusa.Rpc.Client.HayabusaRpcClient.CreateInMemory(dispatcher);
+        var receiver = new RecordingBattleHubReceiver();
+        IDisposable sub = client.BindReceiver(receiver);
+
+        using var broadcastBuf = new PooledBufferWriter(128);
+        PooledBufferWriter bw = broadcastBuf;
+        var snap1 = new WorldSnapshot(new TickNumber(10UL), 2);
+        FrameParser.WriteMemoryPackFrame(ref bw, new MethodId(100), RpcFrameFlags.Broadcast, in snap1);
+
+        int countBeforeDispose = client.ProcessBroadcastFrames(broadcastBuf.WrittenSpan);
+        sub.Dispose();
+
+        broadcastBuf.Clear();
+        var snap2 = new WorldSnapshot(new TickNumber(99UL), 5);
+        FrameParser.WriteMemoryPackFrame(ref bw, new MethodId(100), RpcFrameFlags.Broadcast, in snap2);
+        int countAfterDispose = client.ProcessBroadcastFrames(broadcastBuf.WrittenSpan);
+
+        Assert.Equal(1, countBeforeDispose);
+        Assert.Equal(0, countAfterDispose);
+        Assert.Equal(new TickNumber(10UL), receiver.LastSnapshot.Tick);
+    }
+
+    private static void EnqueueRange(MpscMailbox<int> mailbox, int start, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            while (!mailbox.TryEnqueue(start + i))
+            {
+                System.Threading.Thread.SpinWait(1);
+            }
+        }
+    }
+
+    private static void RunThousandRoomLifecycleCycles(RoomManager roomManager, TransportSubmissionQueue sq)
+    {
+        for (ulong i = 1; i <= 1000; i++)
+        {
+            var roomId = new RoomId(i);
+            BattleRoomService room = roomManager.CreateAndRegisterRoom<BattleRoomService>(roomId);
+            room.JoinPlayer(new ConnectionId(i));
+            room.ExecuteTick(new TickNumber(i));
+            sq.Clear();
+            Assert.True(roomManager.DestroyRoom(roomId));
+        }
+    }
+
     private sealed class RecordingBattleHubReceiver : IBattleHubReceiver
     {
         public WorldSnapshot LastSnapshot { get; private set; }
