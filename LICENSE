@@ -2,6 +2,12 @@ MIT License
 
 Copyright (c) 2026 Hayabusa Contributors
 
+Note: This license applies only to the original code of Hayabusa.
+Hayabusa relies on open-source libraries and architectural designs created by
+Cysharp, Inc. (MemoryPack, ZString, ZLogger, R3, UniTask, LogicLooper, MagicOnion),
+which are copyright (c) Cysharp, Inc. and licensed under the MIT License.
+See THIRD-PARTY-NOTICES.md for full attribution and license details.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

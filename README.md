@@ -4,6 +4,10 @@
 
 `Hayabusa` は、ASP.NET Core (Kestrel) の汎用的な抽象化コストを極限まで削ぎ落とし、**ゼロアロケーション・構造体・C# Source Generator・アンマネージド/Pinned メモリ・Thread-per-Core イベントループ**によって、**「Kestrel を超えるステートレス API / RPC 性能」**と**「60fps/30fps の Tick 同期・Room (Actor) 状態管理を内包したリアルタイムゲームサーバー」**を単一ランタイムで両立する次世代サーバーエンジンです。
 
+> **謝辞と帰属に関する明示（Acknowledgments & Attribution）**:
+> 本プロジェクトは、**Cysharp, Inc.** 様が開発・公開されているオープンソースソフトウェア群（[`MemoryPack`](https://github.com/Cysharp/MemoryPack), [`ZString`](https://github.com/Cysharp/ZString), [`ZLogger`](https://github.com/Cysharp/ZLogger), [`R3`](https://github.com/Cysharp/R3), [`UniTask`](https://github.com/Cysharp/UniTask), [`LogicLooper`](https://github.com/Cysharp/LogicLooper), [`MagicOnion`](https://github.com/Cysharp/MagicOnion)）を利用させていただくことで成り立っています。
+> これらのライブラリおよびその根幹にある設計思想・API モデルはすべて **Cysharp, Inc. 様の著作物・功績** であり、本プロジェクトがそれらを独自に考案・作成したと主張するものでは一切ありません（また、本プロジェクトは Cysharp, Inc. 様の公式製品ではありません）。詳細は [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) をご覧ください。
+
 ---
 
 ## コンセプトと解決する課題
@@ -315,6 +319,7 @@ MIT ライセンスの規約を遵守するため、本リポジトリでは以�
    - リポジトリルートの [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) に `Copyright (c) Cysharp, Inc.` の著作権表示および MIT ライセンス全文を記載しています。バイナリやコンテナイメージとして配布する際も同ファイルを同梱します。
 2. **ソースコード参照・改変時のヘッダー明記**:
    - MIT ライセンスのコード断片を移植・改変して組み込む場合は、該当ソースファイル先頭および [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) に原著作権表示を明記します（[`.cursor/skills/coding-standards/SKILL.md`](.cursor/skills/coding-standards/SKILL.md) 第7節で規約化済み）。
-3. **非公式プロジェクトであることの明示（Disclaimer）**:
-   - `Hayabusa` は Cysharp 社の OSS エコシステムと設計思想に深く敬意を表して開発されている**独立したオープンソースプロジェクト**であり、**Cysharp, Inc. の公式製品および提携プロジェクトではありません**。パッケージ名や名前空間にも `Cysharp.*` は使用せず、`Hayabusa.*` を使用します。
+3. **非公式プロジェクトであることの明示と原著作者への敬意（Disclaimer & Non-Claim of Authorship）**:
+   - `Hayabusa` は Cysharp, Inc. 様の OSS エコシステムと設計思想を利用させていただいて成り立っている**独立したオープンソースプロジェクト**です。
+   - **Cysharp, Inc. 様の公式製品および提携プロジェクトではなく**、また Cysharp, Inc. 様が開発されたライブラリやアーキテクチャ思想（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper`, `MagicOnion`）を**本プロジェクトが独自に発明・作成したと主張することは一切ありません**。パッケージ名や名前空間にも `Cysharp.*` は使用せず、`Hayabusa.*` を使用します。
 

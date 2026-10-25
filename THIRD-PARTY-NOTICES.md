@@ -1,8 +1,10 @@
-# Third-Party Notices
+# Third-Party Notices & Acknowledgments
 
-`Hayabusa` uses or takes architectural inspiration from open-source software developed by **Cysharp, Inc.** and the .NET community.
+`Hayabusa` is built upon and made possible by the open-source libraries and architectural designs created by **Cysharp, Inc.** (`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper`, and `MagicOnion`).
 
-> **Disclaimer**: `Hayabusa` is an independent open-source project and is **not** affiliated with, endorsed by, or an official product of Cysharp, Inc.
+We gratefully acknowledge **Cysharp, Inc.** as the original creator and copyright holder of these libraries and concepts. `Hayabusa` does **not** claim authorship or ownership over any Cysharp, Inc. software, APIs, or architectural designs.
+
+> **Disclaimer**: `Hayabusa` is an independent open-source project that uses Cysharp, Inc.'s open-source software under the MIT License. It is **not** affiliated with, endorsed by, or an official product of Cysharp, Inc.
 
 ---
 

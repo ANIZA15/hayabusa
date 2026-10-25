@@ -86,5 +86,5 @@ description: >-
   - Cysharp 社製 OSS（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper` 等）を NuGet パッケージとして追加、または一部の構造体・アルゴリズムを参考に移植・改変する場合は、必ずリポジトリルートの `THIRD-PARTY-NOTICES.md` に著作権表示（`Copyright (c) Cysharp, Inc.`）と MIT ライセンス全文を保持すること。
 - **ソースコード流用時のファイルヘッダー明記**:
   - 万が一、MIT ライセンスの外部 OSS からソースコードの一部（例: Source Generator 用の `EquatableArray<T>` 等）を直接コピーまたは改変して組み込む場合は、当該 `.cs` ファイルの先頭に元の著作権表示とライセンスコメントを必ず記載すること。
-- **非公式プロジェクトであることの明示**:
-  - ドキュメントやパッケージメタデータにおいて、Cysharp, Inc. の公式製品であると誤認させる表現（`Cysharp.Hayabusa` 名前空間の使用など）は絶対に行わないこと。
+- **非公式プロジェクトであることの明示と自作主張の禁止**:
+  - ドキュメント、コメント、パッケージメタデータにおいて、Cysharp, Inc. 様の公式製品であると誤認させる表現（`Cysharp.Hayabusa` 名前空間の使用など）や、Cysharp, Inc. 様が開発された OSS・設計思想（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper`, `MagicOnion`）を自分たちが考案・作成したかのように主張する表現は絶対に行わないこと。あくまでも Cysharp, Inc. 様の OSS を利用させていただいている立場を常に明記すること。

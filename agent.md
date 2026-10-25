@@ -12,8 +12,9 @@
    - ユーザーへの応答・説明・PR 本文・コミット背景の解説は**常に日本語**で行うこと。
 2. **タスク着手前の必須ステップ**:
    - コードの作成・編集・レビュー・テストを行う前に、必ず第3節の **Skills カタログ（全11種）** から関連する `SKILL.md` を Read ツール等で読み込み、その規約に従って実装すること。
-3. **ライセンスと帰属表示の遵守**:
-   - 本プロジェクトは Cysharp, Inc. の OSS（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper` 思想, `MagicOnion` 思想）を活用する独立したオープンソースプロジェクトであり、Cysharp, Inc. の公式製品ではない。
+3. **ライセンスと帰属表示の遵守（自作主張の禁止）**:
+   - 本プロジェクトは Cysharp, Inc. 様の OSS（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper` 思想, `MagicOnion` 思想）を利用させていただくことで成り立っている独立したオープンソースプロジェクトであり、Cysharp, Inc. 様の公式製品ではない。
+   - Cysharp, Inc. 様の OSS や設計思想・API モデルを「自分たちが考案・作成した」と主張・誤認させる表現は一切行わず、常に原著作者である Cysharp, Inc. 様への帰属と敬意を明記すること。
    - `THIRD-PARTY-NOTICES.md` の MIT ライセンス表記を常に維持し、`Cysharp.*` 名前空間は使用せず `Hayabusa.*` を使用すること。
 
 ---
