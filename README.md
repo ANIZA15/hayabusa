@@ -125,6 +125,7 @@ await app.RunAsync();
 hayabusa/
 ├── .cursor/
 │   └── skills/                      # 開発・品質・セキュリティ・設計規約スキル群
+├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文
 ├── src/
 │   ├── Hayabusa.Core/               # 強い型プリミティブ、軽量Context、Pinned Slab/RingBuffer、Completion I/O 抽象
 │   ├── Hayabusa.Transport/          # Linux io_uring ネイティブ実装 & Windows IOCP / Socket 実装 & InMemoryTransport
@@ -142,9 +143,25 @@ hayabusa/
 
 ---
 
+## Cysharp OSS の導入状況と統合計画
+
+現在 `Hayabusa` は **Phase 0（設計・規約策定フェーズ完了 / コード実装未着手）** であり、各 NuGet パッケージの実導入は **Phase 1 以降**で順次行います。
+
+| OSS ライブラリ | 形態 | 現在の状態 | 導入予定フェーズ | `Hayabusa` での役割 | ライセンス |
+| --- | --- | --- | --- | --- | --- |
+| **[MemoryPack](https://github.com/Cysharp/MemoryPack)** | NuGet 導入 | 未導入（設計済） | **Phase 1** (`Hayabusa.Rpc`) | RPC ペイロードおよびゲーム状態スナップショットのゼロコピーシリアライズ | MIT License |
+| **[ZString](https://github.com/Cysharp/ZString)** | NuGet 導入 | 未導入（設計済） | **Phase 1** (`Hayabusa.Core` / `Rpc`) | UTF-8 文字列・HTTP ヘッダー構築のゼロアロケーション化 | MIT License |
+| **[ZLogger](https://github.com/Cysharp/ZLogger)** | NuGet 導入 | 未導入（設計済） | **Phase 1〜2** (`Hayabusa.Runtime`) | String Interpolation + UTF-8 直書きによるゼロアロケーション構造化ロギング | MIT License |
+| **[R3](https://github.com/Cysharp/R3)** | NuGet 導入 | 未導入（設計済） | **Phase 2** (`Hayabusa.Runtime`) | `DisposableBag` による購読ライフサイクル管理（イベントリーク防止）・リアクティブ制御 | MIT License |
+| **[UniTask](https://github.com/Cysharp/UniTask)** | NuGet / 思想統合 | 未導入（設計済） | **Phase 2** (`Hayabusa.Runtime`) | Thread-per-Core ループ上のゼロアロケーション非同期制御（標準 `ValueTask` / `IValueTaskSource` と併用） | MIT License |
+| **[LogicLooper](https://github.com/Cysharp/LogicLooper)** | アーキテクチャ統合 | 設計反映済 | **Phase 2** (`Hayabusa.Runtime`) | I/O イベントループと一体化した 60fps/30fps 定周期 Tick スケジューラの設計モデル | MIT License |
+| **[MagicOnion](https://github.com/Cysharp/MagicOnion)** | API 体験モデル | 設計反映済 | **Phase 1 & 3** (`Rpc` / `Generator`) | `[HayabusaService]` / `[Rpc]` による C# ファーストな RPC 開発体験のモデル（通信層は独自実装） | MIT License |
+
+---
+
 ## プロジェクト Skills（品質・アーキテクチャ規約）
 
-本リポジトリでは、常に一貫した高品質・高安全性・ゼロアロケーションのコードベースを維持するため、`.cursor/skills/` 配下に以下の9つの専門スキルを定義しています。
+本リポジトリでは、常に一貫した高品質・高安全性・ゼロアロケーションのコードベースを維持するため、`.cursor/skills/` 配下に以下の10個の専門スキルを定義しています。
 
 | スキル名 | パス | 概要 |
 | --- | --- | --- |
@@ -177,3 +194,21 @@ hayabusa/
   - Completion トランスポート層とバッチ Submit パイプライン
 - [ ] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
   - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
+
+---
+
+## ライセンスと帰属表示（License, Attribution & Disclaimer）
+
+### サードパーティ OSS ライセンス（Cysharp, Inc.）
+
+本プロジェクトが導入・参照する Cysharp 社製のすべての OSS（`MemoryPack`, `ZString`, `ZLogger`, `R3`, `UniTask`, `LogicLooper`, `MagicOnion`）は **MIT License（`Copyright (c) Cysharp, Inc.`）** の下で提供されています。
+
+MIT ライセンスの規約を遵守するため、本リポジトリでは以下の対応を行っています。
+
+1. **著作権表示および許諾表示の同梱**:
+   - リポジトリルートの [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) に `Copyright (c) Cysharp, Inc.` の著作権表示および MIT ライセンス全文を記載しています。バイナリやコンテナイメージとして配布する際も同ファイルを同梱します。
+2. **ソースコード参照・改変時のヘッダー明記**:
+   - MIT ライセンスのコード断片を移植・改変して組み込む場合は、該当ソースファイル先頭および [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) に原著作権表示を明記します（[`.cursor/skills/coding-standards/SKILL.md`](.cursor/skills/coding-standards/SKILL.md) 第7節で規約化済み）。
+3. **非公式プロジェクトであることの明示（Disclaimer）**:
+   - `Hayabusa` は Cysharp 社の OSS エコシステムと設計思想に深く敬意を表して開発されている**独立したオープンソースプロジェクト**であり、**Cysharp, Inc. の公式製品および提携プロジェクトではありません**。パッケージ名や名前空間にも `Cysharp.*` は使用せず、`Hayabusa.*` を使用します。
+
