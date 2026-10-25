@@ -13,7 +13,8 @@ namespace Hayabusa.SampleServer;
 public static class Program
 {
     /// <summary>
-    /// Builds and starts the Hayabusa Sample Server.
+    /// Builds and starts the Hayabusa Sample Server according to the configured <see cref="HayabusaServerRole"/>
+    /// (<c>WebOnly</c>, <c>GameOnly</c>, or <c>WebAndGame</c> hybrid).
     /// </summary>
     public static HayabusaApp CreateSampleApp(string[]? args = null)
     {
@@ -27,13 +28,19 @@ public static class Program
             })
             .Build();
 
-        _ = app.RegisterRoom<BattleRoomService>(new RoomId(1UL));
+        if (app.Options.IsGameEnabled)
+        {
+            _ = app.RegisterRoom<BattleRoomService>(new RoomId(1UL));
 
-        app.MapRpc<MoveCommand, WorldSnapshot>(
-            methodId: 2,
-            static (ctx, cmd) => new WorldSnapshot(ctx.CurrentTick, cmd.X >= 0 ? 1 : 0));
+            app.MapRpc<MoveCommand, WorldSnapshot>(
+                methodId: 2,
+                static (ctx, cmd) => new WorldSnapshot(ctx.CurrentTick, cmd.X >= 0 ? 1 : 0));
+        }
 
-        app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+        if (app.Options.IsWebEnabled)
+        {
+            app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+        }
 
         return app;
     }

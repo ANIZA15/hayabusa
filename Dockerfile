@@ -49,7 +49,8 @@ COPY --from=build /src/THIRD-PARTY-NOTICES.md /app/THIRD-PARTY-NOTICES.md
 COPY --from=build /app/publish ./
 
 # Default Hayabusa Server environment configuration (overridable via docker run -e / compose)
-ENV HAYABUSA_BIND_ADDRESS="0.0.0.0" \
+ENV HAYABUSA_ROLE="both" \
+    HAYABUSA_BIND_ADDRESS="0.0.0.0" \
     HAYABUSA_HTTP_PORT="5000" \
     HAYABUSA_RPC_PORT="5001" \
     HAYABUSA_WORKER_THREADS="0" \

@@ -57,6 +57,76 @@ public sealed class HayabusaAppBuilder
     }
 
     /// <summary>
+    /// Configures the operational role of this server (<see cref="HayabusaServerRole.WebOnly"/>,
+    /// <see cref="HayabusaServerRole.GameOnly"/>, or <see cref="HayabusaServerRole.WebAndGame"/>).
+    /// </summary>
+    public HayabusaAppBuilder UseRole(HayabusaServerRole role)
+    {
+        _options.Role = role;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures this server to run strictly as a dedicated stateless Web/HTTP server (<see cref="HayabusaServerRole.WebOnly"/>),
+    /// disabling the game tick scheduler and rejecting binary game RPC frames.
+    /// </summary>
+    public HayabusaAppBuilder UseWebServerOnly(int? httpPort = null)
+    {
+        _options.Role = HayabusaServerRole.WebOnly;
+        if (httpPort.HasValue)
+        {
+            _options.HttpPort = httpPort.Value;
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// Configures this server to run strictly as a dedicated real-time Game/RPC server (<see cref="HayabusaServerRole.GameOnly"/>),
+    /// disabling HTTP parsing and dedicating worker threads to binary RPC and deterministic ticks.
+    /// </summary>
+    public HayabusaAppBuilder UseGameServerOnly(int? tickRateHz = null, int? rpcPort = null)
+    {
+        _options.Role = HayabusaServerRole.GameOnly;
+        if (tickRateHz.HasValue)
+        {
+            _options.TickRate = tickRateHz.Value;
+        }
+
+        if (rpcPort.HasValue)
+        {
+            _options.RpcPort = rpcPort.Value;
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    /// Configures this server to run in hybrid mode (<see cref="HayabusaServerRole.WebAndGame"/>),
+    /// accepting both Web/HTTP traffic and real-time Game/RPC traffic.
+    /// </summary>
+    public HayabusaAppBuilder UseWebAndGameServer(int? httpPort = null, int? rpcPort = null, int? tickRateHz = null)
+    {
+        _options.Role = HayabusaServerRole.WebAndGame;
+        if (httpPort.HasValue)
+        {
+            _options.HttpPort = httpPort.Value;
+        }
+
+        if (rpcPort.HasValue)
+        {
+            _options.RpcPort = rpcPort.Value;
+        }
+
+        if (tickRateHz.HasValue)
+        {
+            _options.TickRate = tickRateHz.Value;
+        }
+
+        return this;
+    }
+
+    /// <summary>
     /// Builds the configured <see cref="HayabusaApp"/> instance.
     /// </summary>
     public HayabusaApp Build() => new(_options);
@@ -87,6 +157,9 @@ public sealed class HayabusaApp : IDisposable
     /// <summary>Gets the server configuration options.</summary>
     public HayabusaServerOptions Options => _options;
 
+    /// <summary>Gets the operational role of this server instance (<c>WebAndGame</c>, <c>WebOnly</c>, or <c>GameOnly</c>).</summary>
+    public HayabusaServerRole Role => _options.Role;
+
     /// <summary>Gets the shared RPC and HTTP endpoint dispatcher.</summary>
     public RpcDispatcher Dispatcher => _dispatcher;
 
@@ -104,6 +177,27 @@ public sealed class HayabusaApp : IDisposable
     public HayabusaApp MapService(IHayabusaRpcService service)
     {
         _dispatcher.RegisterService(service);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a framework-agnostic <see cref="IGameLoopTickHandler"/> across all worker cores (or a specific core)
+    /// so non-MagicOnion / custom ECS / custom game loop architectures can run deterministically on Hayabusa.
+    /// </summary>
+    public HayabusaApp RegisterTickHandler(IGameLoopTickHandler handler, CoreIndex? targetCore = null)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (targetCore.HasValue)
+        {
+            _workers[targetCore.Value.Value].RegisterTickHandler(handler);
+            return this;
+        }
+
+        for (int i = 0; i < _workers.Count; i++)
+        {
+            _workers[i].RegisterTickHandler(handler);
+        }
+
         return this;
     }
 
@@ -218,19 +312,31 @@ public sealed class HayabusaApp : IDisposable
         {
             ITransportBackend transport = TransportFactory.Create(_options.Transport, logger: _options.Logger);
             _transports.Add(transport);
-            var config = new CoreWorkerConfig(new CoreIndex(i), _options.TickRate, Logger: _options.Logger);
+            var config = new CoreWorkerConfig(
+                new CoreIndex(i),
+                _options.TickRate,
+                Logger: _options.Logger,
+                Role: _options.Role);
             _workers.Add(new CoreWorker(config, transport, _dispatcher));
         }
     }
 
     private void BindPrimaryListenerIfNeeded()
     {
-        if (_transports.Count > 0 && _transports[0] is SocketEventTransport socketTransport && _options.HttpPort > 0)
+        if (_transports.Count == 0 || _transports[0] is not SocketEventTransport socketTransport)
         {
-            if (IPAddress.TryParse(_options.BindAddress, out IPAddress? ip))
-            {
-                socketTransport.BindAndListen(new IPEndPoint(ip, _options.HttpPort));
-            }
+            return;
+        }
+
+        if (!IPAddress.TryParse(_options.BindAddress, out IPAddress? ip))
+        {
+            return;
+        }
+
+        int primaryPort = _options.Role == HayabusaServerRole.GameOnly ? _options.RpcPort : _options.HttpPort;
+        if (primaryPort > 0)
+        {
+            socketTransport.BindAndListen(new IPEndPoint(ip, primaryPort));
         }
     }
 

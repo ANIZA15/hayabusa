@@ -5,11 +5,39 @@ using Microsoft.Extensions.Logging;
 namespace Hayabusa.Runtime.Hosting;
 
 /// <summary>
+/// Defines the operational role of a Hayabusa server instance.
+/// Allows running Hayabusa as a dedicated stateless Web/API server, a dedicated real-time Game/RPC server,
+/// or a hybrid unified server handling both workloads on the same Thread-per-Core runtime.
+/// </summary>
+public enum HayabusaServerRole : byte
+{
+    /// <summary>
+    /// Hybrid mode (default): Accepts both HTTP/Web requests and binary RPC / real-time Game Room ticks.
+    /// </summary>
+    WebAndGame = 0,
+
+    /// <summary>
+    /// Dedicated stateless Web/HTTP server mode: Enables HTTP/1.1 endpoints while disabling Game Room ticks
+    /// and rejecting binary game RPC frames.
+    /// </summary>
+    WebOnly = 1,
+
+    /// <summary>
+    /// Dedicated Game/RPC server mode: Enables binary RPC (MemoryPack / custom frames) and deterministic
+    /// LogicLooper-style Game Room ticks while disabling HTTP endpoint parsing.
+    /// </summary>
+    GameOnly = 2,
+}
+
+/// <summary>
 /// Server configuration options populated automatically from 12-Factor environment variables
-/// (<c>HAYABUSA_*</c>) and command-line arguments (<c>--bind</c>, <c>--http-port</c>, <c>--rpc-port</c>, <c>--workers</c>, <c>--tick-rate</c>, <c>--transport</c>).
+/// (<c>HAYABUSA_*</c>) and command-line arguments (<c>--role</c>, <c>--bind</c>, <c>--http-port</c>, <c>--rpc-port</c>, <c>--workers</c>, <c>--tick-rate</c>, <c>--transport</c>).
 /// </summary>
 public sealed class HayabusaServerOptions
 {
+    /// <summary>Gets or sets the operational role of the server (default: <see cref="HayabusaServerRole.WebAndGame"/>).</summary>
+    public HayabusaServerRole Role { get; set; } = HayabusaServerRole.WebAndGame;
+
     /// <summary>Gets or sets the IP address to bind (default: <c>"0.0.0.0"</c>).</summary>
     public string BindAddress { get; set; } = "0.0.0.0";
 
@@ -31,8 +59,34 @@ public sealed class HayabusaServerOptions
     /// <summary>Gets or sets an optional ZLogger-compatible <see cref="ILogger"/> for structured logging.</summary>
     public ILogger? Logger { get; set; }
 
+    /// <summary>Gets a value indicating whether HTTP / Web request processing is enabled under the current <see cref="Role"/>.</summary>
+    public bool IsWebEnabled => Role is HayabusaServerRole.WebAndGame or HayabusaServerRole.WebOnly;
+
+    /// <summary>Gets a value indicating whether binary RPC and Game Room tick loops are enabled under the current <see cref="Role"/>.</summary>
+    public bool IsGameEnabled => Role is HayabusaServerRole.WebAndGame or HayabusaServerRole.GameOnly;
+
     /// <summary>Gets the resolved positive worker count (using <see cref="Environment.ProcessorCount"/> when <see cref="WorkerThreads"/> &lt;= 0).</summary>
     public int ResolvedWorkerCount => WorkerThreads > 0 ? WorkerThreads : Math.Max(1, Environment.ProcessorCount);
+
+    /// <summary>
+    /// Parses a role string (<c>"web"</c>, <c>"game"</c>, <c>"both"</c>, <c>"all"</c>, <c>"hybrid"</c>, <c>"web-only"</c>, <c>"game-only"</c>)
+    /// into a <see cref="HayabusaServerRole"/> value.
+    /// </summary>
+    public static HayabusaServerRole ParseRoleOrDefault(string? raw, HayabusaServerRole fallback = HayabusaServerRole.WebAndGame)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        return raw.Trim().ToUpperInvariant() switch
+        {
+            "WEB" or "WEBONLY" or "WEB-ONLY" or "HTTP" => HayabusaServerRole.WebOnly,
+            "GAME" or "GAMEONLY" or "GAME-ONLY" or "RPC" => HayabusaServerRole.GameOnly,
+            "BOTH" or "ALL" or "HYBRID" or "WEBANDGAME" or "WEB-AND-GAME" => HayabusaServerRole.WebAndGame,
+            _ => fallback,
+        };
+    }
 
     /// <summary>
     /// Applies environment variables (<c>HAYABUSA_*</c>) and command-line overrides to this options instance.
@@ -48,6 +102,7 @@ public sealed class HayabusaServerOptions
 
     private void ApplyEnvironmentVariables()
     {
+        Role = ParseRoleOrDefault(Environment.GetEnvironmentVariable("HAYABUSA_ROLE"), Role);
         BindAddress = ReadStringEnv("HAYABUSA_BIND_ADDRESS", BindAddress);
         HttpPort = ReadIntEnv("HAYABUSA_HTTP_PORT", HttpPort);
         RpcPort = ReadIntEnv("HAYABUSA_RPC_PORT", RpcPort);
@@ -58,12 +113,35 @@ public sealed class HayabusaServerOptions
 
     private void ApplyCommandLineArgs(string[] args)
     {
-        for (int i = 0; i < args.Length - 1; i++)
+        for (int i = 0; i < args.Length; i++)
         {
-            if (ApplySingleArgPair(args[i], args[i + 1]))
+            if (ApplyStandaloneRoleFlag(args[i]))
+            {
+                continue;
+            }
+
+            if (i < args.Length - 1 && ApplySingleArgPair(args[i], args[i + 1]))
             {
                 i++;
             }
+        }
+    }
+
+    private bool ApplyStandaloneRoleFlag(string arg)
+    {
+        switch (arg)
+        {
+            case "--web-only":
+                Role = HayabusaServerRole.WebOnly;
+                return true;
+            case "--game-only":
+                Role = HayabusaServerRole.GameOnly;
+                return true;
+            case "--web-and-game":
+                Role = HayabusaServerRole.WebAndGame;
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -71,6 +149,9 @@ public sealed class HayabusaServerOptions
     {
         switch (key)
         {
+            case "--role":
+                Role = ParseRoleOrDefault(value, Role);
+                return true;
             case "--bind":
                 BindAddress = value;
                 return true;

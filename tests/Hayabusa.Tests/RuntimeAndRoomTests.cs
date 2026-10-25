@@ -158,16 +158,95 @@ public sealed class RuntimeAndRoomTests
     public void HayabusaServerOptions_CommandLineArguments_OverrideDefaults()
     {
         var options = new HayabusaServerOptions();
-        string[] args = ["--bind", "127.0.0.1", "--http-port", "8080", "--rpc-port", "8081", "--workers", "4", "--tick-rate", "30", "--transport", "inmemory"];
+        string[] args = ["--role", "web", "--bind", "127.0.0.1", "--http-port", "8080", "--rpc-port", "8081", "--workers", "4", "--tick-rate", "30", "--transport", "inmemory"];
 
         options.ApplyEnvironmentAndArgs(args);
 
+        Assert.Equal(HayabusaServerRole.WebOnly, options.Role);
+        Assert.True(options.IsWebEnabled);
+        Assert.False(options.IsGameEnabled);
         Assert.Equal("127.0.0.1", options.BindAddress);
         Assert.Equal(8080, options.HttpPort);
         Assert.Equal(8081, options.RpcPort);
         Assert.Equal(4, options.WorkerThreads);
         Assert.Equal(30, options.TickRate);
         Assert.Equal("inmemory", options.Transport);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenConfiguredAsWebOnly_ServesHttpRequestsAndSkipsGameTicksAndRejectsRpc()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        var config = new CoreWorkerConfig(CoreIndex.Zero, TickRateHz: 60, TimeProvider: fakeTime, Role: HayabusaServerRole.WebOnly);
+        using var worker = new CoreWorker(config, transport, dispatcher);
+        BattleRoomService room = worker.RoomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+
+        var httpConn = new ConnectionId(1UL);
+        var rpcConn = new ConnectionId(2UL);
+        transport.EnqueueAccept(httpConn);
+        transport.TryEnqueueReceive(httpConn, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8);
+
+        using var rpcFrame = new PooledBufferWriter(128);
+        PooledBufferWriter w = rpcFrame;
+        BattleRoomServiceClient.WriteMoveAsyncRequest(ref w, new MoveCommand(1f, 2f, 3f));
+        transport.EnqueueAccept(rpcConn);
+        transport.TryEnqueueReceive(rpcConn, rpcFrame.WrittenSpan);
+
+        fakeTime.Advance(TimeSpan.FromMilliseconds(50));
+        worker.StepIteration();
+
+        Assert.Single(transport.GetSentPayloads(httpConn));
+        Assert.True(transport.IsDisconnected(rpcConn));
+        Assert.Equal(TickNumber.Zero, room.CurrentTick);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenConfiguredAsGameOnly_ExecutesRpcAndCustomGameLoopTicksAndRejectsHttp()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        var config = new CoreWorkerConfig(CoreIndex.Zero, TickRateHz: 50, TimeProvider: fakeTime, Role: HayabusaServerRole.GameOnly);
+        using var worker = new CoreWorker(config, transport, dispatcher);
+        var customLoop = new RecordingTickHandler();
+        worker.RegisterTickHandler(customLoop);
+
+        var httpConn = new ConnectionId(10UL);
+        transport.EnqueueAccept(httpConn);
+        transport.TryEnqueueReceive(httpConn, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8);
+
+        fakeTime.Advance(TimeSpan.FromMilliseconds(20));
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(httpConn));
+        Assert.Empty(transport.GetSentPayloads(httpConn));
+        Assert.Equal(new TickNumber(1UL), customLoop.LastTick);
+    }
+
+    [Fact]
+    public void HayabusaAppBuilder_RoleBuilderMethods_ConfigureWebOnlyGameOnlyAndHybridModes()
+    {
+        using HayabusaApp webOnly = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseWebServerOnly(httpPort: 8080).Build();
+        using HayabusaApp gameOnly = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseGameServerOnly(tickRateHz: 30, rpcPort: 9000).Build();
+        using HayabusaApp hybrid = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseWebAndGameServer(httpPort: 8080, rpcPort: 9000, tickRateHz: 60).Build();
+
+        Assert.Equal(HayabusaServerRole.WebOnly, webOnly.Role);
+        Assert.Equal(HayabusaServerRole.GameOnly, gameOnly.Role);
+        Assert.Equal(HayabusaServerRole.WebAndGame, hybrid.Role);
+    }
+
+    private sealed class RecordingTickHandler : IGameLoopTickHandler
+    {
+        public TickNumber LastTick { get; private set; }
+
+        public void OnGameTick(CoreIndex coreIndex, TickNumber tick)
+        {
+            LastTick = tick;
+        }
     }
 
     [Fact]
