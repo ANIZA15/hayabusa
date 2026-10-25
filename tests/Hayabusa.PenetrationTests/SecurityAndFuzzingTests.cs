@@ -212,6 +212,215 @@ public sealed class SecurityAndFuzzingTests
         Assert.Equal(1, room.PlayerCount);
     }
 
+    // Vector 1 Extended: CoreWorker immediately evicts connections sending unsupported protocol versions
+    [Fact]
+    public void CoreWorker_WhenClientSendsUnsupportedProtocolVersion_EvictsImmediatelyWithZeroSlabLeak()
+    {
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero), transport, dispatcher);
+        var attacker = new ConnectionId(1001UL);
+
+        Span<byte> badVersionFrame = stackalloc byte[RpcHeader.Size];
+        var header = new RpcHeader(0, Version: 99, RpcFrameFlags.None, new MethodId(1));
+        header.WriteTo(badVersionFrame);
+
+        transport.EnqueueAccept(attacker);
+        transport.TryEnqueueReceive(attacker, badVersionFrame);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(attacker));
+        Assert.Equal(0, worker.ActiveConnectionCount);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    // Vector 2 Extended: Corrupted MemoryPack payload inside valid RPC header does not crash CoreWorker
+    [Fact]
+    public void CoreWorker_WhenRpcFrameContainsCorruptedMemoryPackBody_EvictsAttackerWithoutCrashingWorker()
+    {
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapRpc<string, int>(1, static s => s.Length);
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero), transport, dispatcher);
+
+        var attacker = new ConnectionId(2002UL);
+        var honestClient = new ConnectionId(2003UL);
+
+        // Construct an RPC frame for MethodId=1 (expects string) with a corrupted 4-byte string length header (claims 500 chars in 4 bytes)
+        using var badWriter = new PooledBufferWriter(64);
+        PooledBufferWriter bw = badWriter;
+        FrameParser.WriteFrame(ref bw, new MethodId(1), RpcFrameFlags.None, [0xF4, 0x01, 0x00, 0x00]);
+
+        using var goodWriter = new PooledBufferWriter(64);
+        PooledBufferWriter gw = goodWriter;
+        string hello = "hayabusa";
+        FrameParser.WriteMemoryPackFrame(ref gw, new MethodId(1), RpcFrameFlags.None, in hello);
+
+        transport.EnqueueAccept(attacker);
+        transport.TryEnqueueReceive(attacker, badWriter.WrittenSpan);
+        transport.EnqueueAccept(honestClient);
+        transport.TryEnqueueReceive(honestClient, goodWriter.WrittenSpan);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(attacker));
+        Assert.False(transport.IsDisconnected(honestClient));
+        Assert.Single(transport.GetSentPayloads(honestClient));
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    // Vector 3 Extended: HTTP Slowloris incomplete header drip and Idle Connection Timeout sweep
+    [Fact]
+    public void CoreWorker_UnderHttpSlowlorisAndIdleConnection_EvictsBothDeterministically()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TimeProvider: fakeTime), transport, dispatcher);
+
+        var httpSlowloris = new ConnectionId(3001UL);
+        var idleConnection = new ConnectionId(3002UL);
+
+        transport.EnqueueAccept(httpSlowloris);
+        transport.EnqueueAccept(idleConnection);
+        transport.TryEnqueueReceive(httpSlowloris, "GET /health HTTP/1.1\r\nHost: slow"u8);
+        worker.StepIteration();
+
+        // Advance 6 seconds (> 5s FrameReadTimeout): httpSlowloris is evicted, idleConnection remains
+        fakeTime.Advance(TimeSpan.FromSeconds(6));
+        worker.StepIteration();
+        Assert.True(transport.IsDisconnected(httpSlowloris));
+        Assert.False(transport.IsDisconnected(idleConnection));
+
+        // Advance another 25 seconds (total 31s > 30s IdleTimeout): idleConnection is now evicted
+        fakeTime.Advance(TimeSpan.FromSeconds(25));
+        worker.StepIteration();
+        Assert.True(transport.IsDisconnected(idleConnection));
+        Assert.Equal(0, worker.ActiveConnectionCount);
+    }
+
+    // Vector 4 Extended: Case-insensitive Smuggling headers and CoreWorker 400 Bad Request response on malformed HTTP
+    [Theory]
+    [InlineData("POST / HTTP/1.1\r\nHost: a\r\ntRaNsFeR-eNcOdInG: chunked\r\n\r\n", HttpParseError.RequestSmugglingDetected)]
+    [InlineData("POST / HTTP/1.1\r\nHost: a\r\ncOnTeNt-LeNgTh: 4\r\nCONTENT-LENGTH: 4\r\n\r\ntest", HttpParseError.RequestSmugglingDetected)]
+    [InlineData("GET / HTTP/1.1\r\nHost: a\nEvil: bare-lf\r\n\r\n", HttpParseError.MalformedHeader)]
+    public void HttpParser_UnderCaseMixedSmugglingAndBareLf_RejectsDeterministically(
+        string rawRequest,
+        HttpParseError expectedError)
+    {
+        byte[] bytes = Encoding.ASCII.GetBytes(rawRequest);
+
+        HttpParseError actual = HttpParser.TryParseRequest(bytes, out _);
+
+        Assert.Equal(expectedError, actual);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenMalformedHttpRequestReceived_Sends400BadRequestAndDisconnects()
+    {
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero), transport, dispatcher);
+        var attacker = new ConnectionId(4001UL);
+
+        transport.EnqueueAccept(attacker);
+        transport.TryEnqueueReceive(attacker, "GET /../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n"u8);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(attacker));
+        Assert.Single(transport.GetSentPayloads(attacker));
+        string response = Encoding.UTF8.GetString(transport.GetSentPayloads(attacker)[0]);
+        Assert.StartsWith("HTTP/1.1 400 Bad Request", response, StringComparison.Ordinal);
+    }
+
+    // Vector 5 Extended: Uppercase and mixed-case percent-encoded path traversal
+    [Theory]
+    [InlineData("GET /%2E%2E/secret HTTP/1.1\r\nHost: localhost\r\n\r\n")]
+    [InlineData("GET /a/%2e%2E/b HTTP/1.1\r\nHost: localhost\r\n\r\n")]
+    public void HttpParser_UnderUppercasePercentEncodedTraversal_ReturnsPathTraversalDetected(string rawRequest)
+    {
+        byte[] bytes = Encoding.ASCII.GetBytes(rawRequest);
+
+        HttpParseError error = HttpParser.TryParseRequest(bytes, out _);
+
+        Assert.Equal(HttpParseError.PathTraversalDetected, error);
+    }
+
+    // Vector 6 Extended: Single-connection burst flood rate limiting & receive buffer overflow protection
+    [Fact]
+    public void CoreWorker_WhenSingleConnectionExceedsRpcBurstRateLimit_EvictsFloodingConnection()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapRpc<int, int>(1, static x => x);
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TimeProvider: fakeTime), transport, dispatcher);
+        var flooder = new ConnectionId(6001UL);
+
+        using var writer = new PooledBufferWriter(4096);
+        PooledBufferWriter w = writer;
+        for (int i = 0; i < 130; i++)
+        {
+            FrameParser.WriteMemoryPackFrame(ref w, new MethodId(1), RpcFrameFlags.None, in i);
+        }
+
+        transport.EnqueueAccept(flooder);
+        transport.TryEnqueueReceive(flooder, writer.WrittenSpan);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(flooder));
+        Assert.Equal(0, worker.ActiveConnectionCount);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenConnectionOverflowsReceiveBufferCapacity_EvictsSafelyWithZeroLeak()
+    {
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        // Configure MaxFrameSize = 64 so ContiguousReceiveBuffer capacity is 128 bytes
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, MaxFrameSize: 64), transport, dispatcher);
+        var attacker = new ConnectionId(6002UL);
+
+        byte[] chunk200 = new byte[200];
+        chunk200.AsSpan().Fill((byte)'G');
+        transport.EnqueueAccept(attacker);
+        transport.TryEnqueueReceive(attacker, chunk200);
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(attacker));
+        Assert.Equal(0, worker.ActiveConnectionCount);
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+    }
+
+    // Vector 7 Extended: Former room member after LeavePlayer and non-existent RoomId via Mailbox are rejected
+    [Fact]
+    public void CoreWorker_WhenFormerPlayerOrInvalidRoomMessageArrivesViaMailbox_IgnoresSafely()
+    {
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero), transport, dispatcher);
+        BattleRoomService room = worker.RoomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+
+        var exPlayer = new ConnectionId(7001UL);
+        room.JoinPlayer(exPlayer);
+        room.LeavePlayer(exPlayer);
+
+        using var frameWriter = new PooledBufferWriter(128);
+        PooledBufferWriter w = frameWriter;
+        BattleRoomServiceClient.WriteMoveAsyncRequest(ref w, new MoveCommand(50f, 50f, 50f));
+        byte[] validFrame = frameWriter.WrittenSpan.ToArray();
+
+        // 1. Ex-player who already left Room 1
+        worker.Mailbox.TryEnqueue(new CrossCoreRpcMessage(CoreIndex.Zero, exPlayer, new RoomId(1UL), validFrame));
+        // 2. Non-existent Room 999
+        worker.Mailbox.TryEnqueue(new CrossCoreRpcMessage(CoreIndex.Zero, exPlayer, new RoomId(999UL), validFrame));
+
+        worker.StepIteration();
+
+        Assert.False(room.TryGetPlayerPosition(exPlayer, out _));
+        Assert.Equal(0, room.PlayerCount);
+    }
+
     // Structure-Aware Fuzzing (10,000 deterministic mutations across RPC and HTTP parsers + worker loop)
     [Fact]
     public void StructureAwareFuzzer_TenThousandMutatedPayloads_NeverCrashesAndLeavesZeroOutstandingSlabs()

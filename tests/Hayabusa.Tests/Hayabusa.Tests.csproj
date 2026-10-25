@@ -11,7 +11,9 @@
     <ProjectReference Include="..\..\src\Hayabusa.Rpc\Hayabusa.Rpc.csproj" />
     <ProjectReference Include="..\..\src\Hayabusa.Transport\Hayabusa.Transport.csproj" />
     <ProjectReference Include="..\..\src\Hayabusa.Runtime\Hayabusa.Runtime.csproj" />
-    <ProjectReference Include="..\..\src\Hayabusa.Generator\Hayabusa.Generator.csproj" />
+    <ProjectReference Include="..\..\src\Hayabusa.Generator\Hayabusa.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="true" />
     <ProjectReference Include="..\..\samples\Hayabusa.SampleServer\Hayabusa.SampleServer.csproj" />
   </ItemGroup>
 
