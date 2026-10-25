@@ -32,8 +32,13 @@ description: >-
    ```
 2. **完全修飾名（`global::`）の徹底**:
    - ユーザーコード側の名前空間衝突を防ぐため、生成コード内のすべての型参照には `global::System.ReadOnlySpan<byte>` や `global::MemoryPack.MemoryPackSerializer` のように **`global::`** プレフィックスを付与する。
-3. **分岐最適化されたディスパッチャ生成**:
+3. **分岐最適化されたディスパッチャ生成とコンパクト RPC 記法**:
    - **RPC ディスパッチ**: `MethodId`（`int`）に対するフラットな `switch` 文を生成し、該当メソッドで `MemoryPackSerializer.Deserialize<TRequest>(payloadSpan)` → サービスメソッド呼び出し → `MemoryPackSerializer.Serialize(ref responseWriter, in result)` をインライン展開する。
+   - **コンパクト RPC 記法の自動変換**:
+     - `MethodId` 省略時の自動採番（`MethodId.FromRoute(serviceName, methodName)` と同一の 31-bit 正整数 FNV-1a ハッシュ）
+     - 2個以上の引数を持つ `[Rpc]` メソッドの自動 `ValueTuple` シリアライズ／デシリアライズ展開（専用 Request DTO の定義不要）
+     - `ValueTask<T>` / `UniTask<T>` に加え、同期戻り値 `T` および `void` の直接サポート
+     - `<ServiceName>Client` へのゼロアロケーション `Write*Request` と非同期呼び出しメソッド（`ConnectAsync` / `CreateInMemory` / `*Async`）の両方の自動生成
    - **HTTP ルーティング**: パス文字列を毎回比較するのではなく、パス長と先頭 4/8 バイト整数比較（`BinaryPrimitives.ReadUInt32LittleEndian` 等）を組み合わせた **コンパイル時 Radix Trie（基数木）** を C# コードとして出力する。
 
 ## 3. 診断エラー（Diagnostics）の設計

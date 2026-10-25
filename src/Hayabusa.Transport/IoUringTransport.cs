@@ -189,7 +189,7 @@ public sealed partial class IoUringTransport : ITransportBackend
             return default;
         }
 
-        return new RingMemoryMap(ringPtr, ringSize, sqesPtr, sqeBytes, p.SqOff, p.CqOff);
+        return new RingMemoryMap((ringPtr, ringSize), (sqesPtr, sqeBytes), p.SqOff, p.CqOff);
     }
 
     private unsafe void FlushBatchToKernelSqRing(int batchCount)
@@ -273,17 +273,15 @@ public sealed partial class IoUringTransport : ITransportBackend
     private readonly struct RingMemoryMap
     {
         public RingMemoryMap(
-            nint ringBase,
-            nuint ringSize,
-            nint sqesBase,
-            nuint sqesSize,
+            (nint Base, nuint Size) ring,
+            (nint Base, nuint Size) sqes,
             IoSqRingOffsets sqOff,
             IoCqRingOffsets cqOff)
         {
-            RingBase = ringBase;
-            RingSize = ringSize;
-            SqesBase = sqesBase;
-            SqesSize = sqesSize;
+            RingBase = ring.Base;
+            RingSize = ring.Size;
+            SqesBase = sqes.Base;
+            SqesSize = sqes.Size;
             SqOff = sqOff;
             CqOff = cqOff;
         }

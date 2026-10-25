@@ -417,7 +417,7 @@ public sealed class RuntimeAndRoomTests
     public async Task BattleRoomServiceClient_CompactAutoMethodIdAndMultiParamRpc_RoundtripsViaGeneratedClient()
     {
         var dispatcher = new RpcDispatcher();
-        var room = new BattleRoomService();
+        using var room = new BattleRoomService();
         dispatcher.RegisterService(room);
         using BattleRoomServiceClient client = BattleRoomServiceClient.CreateInMemory(dispatcher);
 

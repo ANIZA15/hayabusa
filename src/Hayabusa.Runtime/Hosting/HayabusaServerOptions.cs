@@ -145,7 +145,10 @@ public sealed class HayabusaServerOptions
         }
     }
 
-    private bool ApplySingleArgPair(string key, string value)
+    private bool ApplySingleArgPair(string key, string value) =>
+        ApplyStringArgPair(key, value) || ApplyNumericArgPair(key, value);
+
+    private bool ApplyStringArgPair(string key, string value)
     {
         switch (key)
         {
@@ -155,6 +158,18 @@ public sealed class HayabusaServerOptions
             case "--bind":
                 BindAddress = value;
                 return true;
+            case "--transport":
+                Transport = value;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool ApplyNumericArgPair(string key, string value)
+    {
+        switch (key)
+        {
             case "--http-port":
                 HttpPort = ParseIntOrDefault(value, HttpPort);
                 return true;
@@ -166,9 +181,6 @@ public sealed class HayabusaServerOptions
                 return true;
             case "--tick-rate":
                 TickRate = ParseIntOrDefault(value, TickRate);
-                return true;
-            case "--transport":
-                Transport = value;
                 return true;
             default:
                 return false;

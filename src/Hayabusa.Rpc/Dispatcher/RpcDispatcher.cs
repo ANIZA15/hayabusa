@@ -180,7 +180,7 @@ public sealed class RpcDispatcher
             ValueTask<bool> serviceTask = _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter);
             if (!serviceTask.IsCompletedSuccessfully)
             {
-                return AwaitGeneratedServicesSlowAsync(serviceTask, i, context, methodId, payload, responseWriter);
+                return AwaitGeneratedServicesSlowAsync(serviceTask, i, (context, methodId, payload, responseWriter));
             }
 
             if (serviceTask.Result)
@@ -195,10 +195,7 @@ public sealed class RpcDispatcher
     private async ValueTask<bool> AwaitGeneratedServicesSlowAsync(
         ValueTask<bool> pendingTask,
         int startIndex,
-        HayabusaContext context,
-        MethodId methodId,
-        ReadOnlyMemory<byte> payload,
-        PooledBufferWriter responseWriter)
+        (HayabusaContext Context, MethodId MethodId, ReadOnlyMemory<byte> Payload, PooledBufferWriter ResponseWriter) call)
     {
         if (await pendingTask)
         {
@@ -207,13 +204,13 @@ public sealed class RpcDispatcher
 
         for (int i = startIndex + 1; i < _generatedServices.Count; i++)
         {
-            if (await _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter))
+            if (await _generatedServices[i].TryDispatchRpcAsync(call.Context, call.MethodId, call.Payload, call.ResponseWriter))
             {
                 return true;
             }
         }
 
-        return TryDispatchMinimalOrError(context, methodId, payload.Span, responseWriter);
+        return TryDispatchMinimalOrError(call.Context, call.MethodId, call.Payload.Span, call.ResponseWriter);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
