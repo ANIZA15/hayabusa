@@ -276,15 +276,22 @@ public class HayabusaHotPathBenchmarks : IDisposable
     }
 }
 
-/// <summary>Entry point for running the Hayabusa BenchmarkDotNet suite.</summary>
+/// <summary>Entry point for running the Hayabusa BenchmarkDotNet suite and cross-language HTTP benchmarks.</summary>
 public static class Program
 {
-    /// <summary>Runs all benchmarks in the assembly.</summary>
-    public static void Main(string[] args)
+    /// <summary>Runs all benchmarks in the assembly or executes the cross-language comparison suite.</summary>
+    public static async Task Main(string[] args)
     {
         if (args is not null && Array.IndexOf(args, "--quick-compare") >= 0)
         {
             HayabusaHotPathBenchmarks.RunQuickComparison();
+            return;
+        }
+
+        if (args is not null && Array.IndexOf(args, "--cross-lang") >= 0)
+        {
+            CrossLanguageBenchmarkOptions options = CrossLanguageBenchmarkOptions.Parse(args);
+            await CrossLanguageBenchmarks.RunAsync(options);
             return;
         }
 

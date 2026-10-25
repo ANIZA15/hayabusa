@@ -136,12 +136,14 @@ hayabusa/
 ├── .codex/
 │   └── skills/                      # OpenAI Codex CLI 用スキル群 (全11種・完全同期)
 ├── scripts/
-│   └── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
+│   ├── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
+│   └── run-cross-lang-benchmarks.sh # Hayabusa vs Go vs Rust クロス言語ベンチマーク実行スクリプト (Docker / Ephemeral 自動切替)
 ├── .devcontainer/                   # VS Code / Cursor 用 DevContainer (.NET 9 + liburing + 拡張機能永続化)
 │   ├── devcontainer.json
 │   └── Dockerfile
 ├── Dockerfile                       # 本番・スタンドアロン起動用マルチステージ Dockerfile (JIT / NativeAOT 両対応)
 ├── docker-compose.yml               # ワンコマンドで Hayabusa サーバーを立ち上げる Compose 設定
+├── docker-compose.benchmarks.yml    # Go (net/http) / Rust (axum) / Hayabusa クロス言語比較ベンチマーク用 Compose 設定 (.go/.rs ファイル不要)
 ├── .env.example                     # サーバー起動パラメータ（ポート・TickRate・Transport）の設定サンプル
 ├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定 (.NET 9 / .NET 10 / .NET 11+ マルチターゲット)・ライセンス同梱設定
 ├── Directory.Packages.props         # 中央パッケージ管理 (Central Package Management)
@@ -296,6 +298,50 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
   - Completion トランスポート層とバッチ Submit パイプライン
 - [x] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
   - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
+  - Go 標準 (`net/http`) および Rust 標準 (`axum` / `tokio`) との Docker 完結型クロス言語 Web サーバーベンチマーク
+
+---
+
+## ベンチマーク計測（Hayabusa vs Go `net/http` vs Rust `axum` / `tokio`）
+
+リポジトリ内に Go（`.go` / `go.mod`）や Rust（`.rs` / `Cargo.toml`）のファイルを一切置かず、`docker-compose.benchmarks.yml` のインラインマルチステージビルド（`dockerfile_inline`）または一時ディレクトリ（`/tmp`）のエフェメラルハーネスを用いて、いつでもワンコマンドで3言語の Web サーバー性能を比較計測できます。
+
+### 1. Docker Compose で計測する（推奨・ホスト環境への Go / Rust インストール不要）
+
+```bash
+# Hayabusa (.NET 9) / Go (net/http) / Rust (axum + tokio) の3コンテナをビルド・起動して一括計測
+docker compose -f docker-compose.benchmarks.yml up --build --abort-on-container-exit
+
+# 計測後のコンテナ削除
+docker compose -f docker-compose.benchmarks.yml down --remove-orphans
+```
+
+### 2. スクリプトまたは `dotnet run` で計測する
+
+```bash
+# Docker が動いていれば Docker Compose、コンテナ内等の場合は /tmp エフェメラルビルドへ自動フォールバック
+./scripts/run-cross-lang-benchmarks.sh
+
+# コネクション数・リクエスト数を指定して実行する例
+dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -- --cross-lang --connections 16 --requests 32000
+
+# インプロセスのホットパス 0 B アロケーション検証（Kestrel PipeReader / System.Text.Json 比較）
+dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -- --quick-compare
+```
+
+### 3. 計測シナリオと実測サンプル（16 Keep-Alive Connections / 32,000 Requests）
+
+| シナリオ | サーバー実装 | スループット (`req/s`) | 平均レイテンシ (`us`) | P50 (`us`) | P99 (`us`) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| **1. `GET /health` (Plaintext Keep-Alive)** | **`Hayabusa (.NET 9)`** | `117,322` | `116.7` | `100.9` | **`257.0`** |
+| | `Go 1.22 (net/http)` | `122,879` | `124.3` | `96.8` | `645.6` |
+| | `Rust 1.83 (axum / tokio)` | `151,769` | `102.7` | `98.4` | `246.7` |
+| **2. `GET /api/status` (JSON Keep-Alive)** | **`Hayabusa (.NET 9)`** | **`149,463`** | **`95.3`** | `88.7` | **`226.9`** |
+| | `Go 1.22 (net/http)` | `118,443` | `129.0` | `85.4` | `976.3` |
+| | `Rust 1.83 (axum / tokio)` | `149,183` | `101.9` | `96.6` | `161.4` |
+| **3. `GET /health` (16x HTTP/1.1 Pipelined)** | **`Hayabusa (.NET 9)`** | **`1,968,383`** | **`6.0`** | **`5.1`** | **`24.8`** |
+| | `Go 1.22 (net/http)` | `213,909` | `68.6` | `43.3` | `384.2` |
+| | `Rust 1.83 (axum / tokio)` | `931,885` | `15.8` | `12.3` | `101.1` |
 
 ---
 

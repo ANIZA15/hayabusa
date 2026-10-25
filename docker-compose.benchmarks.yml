@@ -1,0 +1,213 @@
+# =============================================================================
+# Cross-Language Web Server Benchmark Suite (Hayabusa vs Go net/http vs Rust axum)
+#
+# Zero .go / .rs files in the repository:
+# Go and Rust servers are synthesized and compiled entirely inside Docker build stages
+# via `dockerfile_inline`.
+#
+# Usage:
+#   docker compose -f docker-compose.benchmarks.yml up --build --abort-on-container-exit
+#   docker compose -f docker-compose.benchmarks.yml down --remove-orphans
+# =============================================================================
+
+services:
+  hayabusa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Release
+        PUBLISH_AOT: "${PUBLISH_AOT:-false}"
+    container_name: hayabusa-bench-server
+    environment:
+      HAYABUSA_ROLE: "web"
+      HAYABUSA_BIND_ADDRESS: "0.0.0.0"
+      HAYABUSA_HTTP_PORT: "5000"
+      HAYABUSA_WORKER_THREADS: "${BENCH_SERVER_WORKERS:-0}"
+      HAYABUSA_TRANSPORT: "${HAYABUSA_TRANSPORT:-auto}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    security_opt:
+      - seccomp:unconfined
+
+  go-std:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM golang:1.22-alpine AS build
+        WORKDIR /src
+        RUN cat <<'EOF' > main.go
+        package main
+
+        import (
+            "net"
+            "net/http"
+            "os"
+            "time"
+        )
+
+        var okBytes = []byte("OK")
+        var jsonBytes = []byte(`{"status":"ok","engine":"Go-net/http"}`)
+
+        func main() {
+            addr := ":5000"
+            if len(os.Args) > 1 {
+                addr = os.Args[1]
+            }
+            mux := http.NewServeMux()
+            mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+                w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+                w.Header().Set("Content-Length", "2")
+                w.WriteHeader(http.StatusOK)
+                _, _ = w.Write(okBytes)
+            })
+            mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+                w.Header().Set("Content-Type", "application/json; charset=utf-8")
+                w.Header().Set("Content-Length", "38")
+                w.WriteHeader(http.StatusOK)
+                _, _ = w.Write(jsonBytes)
+            })
+            srv := &http.Server{
+                Addr:              addr,
+                Handler:           mux,
+                ReadHeaderTimeout: 10 * time.Second,
+                IdleTimeout:       60 * time.Second,
+            }
+            ln, err := net.Listen("tcp", addr)
+            if err != nil {
+                panic(err)
+            }
+            _ = srv.Serve(ln)
+        }
+        EOF
+        RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/go-server main.go
+
+        FROM alpine:3.20
+        COPY --from=build /out/go-server /usr/local/bin/go-server
+        EXPOSE 5000/tcp
+        ENTRYPOINT ["/usr/local/bin/go-server", "0.0.0.0:5000"]
+    container_name: go-std-bench-server
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  rust-axum:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.83-bookworm AS build
+        WORKDIR /src
+        RUN mkdir -p src && cat <<'EOF' > Cargo.toml
+        [package]
+        name = "rust_axum_bench"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        axum = { version = "=0.7.9", default-features = false, features = ["http1", "tokio"] }
+        tokio = { version = "=1.42.0", default-features = false, features = ["rt-multi-thread", "net", "macros"] }
+        hyper = { version = "=1.5.2", default-features = false, features = ["http1", "server"] }
+        hyper-util = { version = "=0.1.10", default-features = false, features = ["tokio", "server", "http1", "service"] }
+        tower = { version = "=0.5.1", default-features = false }
+        socket2 = { version = "=0.5.8", default-features = false }
+        mio = { version = "=1.0.3", default-features = false, features = ["os-poll", "net"] }
+        bytes = "=1.9.0"
+        http = "=1.2.0"
+        http-body = "=1.0.1"
+        http-body-util = "=0.1.2"
+        pin-project-lite = "=0.2.15"
+        futures-util = { version = "=0.3.31", default-features = false }
+
+        [profile.release]
+        opt-level = 3
+        lto = "thin"
+        codegen-units = 1
+        EOF
+        RUN cat <<'EOF' > src/main.rs
+        use axum::{routing::get, Router, response::IntoResponse, http::{header, HeaderValue}};
+        use hyper::server::conn::http1;
+        use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+
+        async fn health() -> impl IntoResponse {
+            ([(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))], "OK")
+        }
+
+        async fn status() -> impl IntoResponse {
+            ([(header::CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8"))], "{\"status\":\"ok\",\"engine\":\"Rust-axum\"}")
+        }
+
+        #[tokio::main]
+        async fn main() {
+            let addr = std::env::args().nth(1).unwrap_or_else(|| "0.0.0.0:5000".to_string());
+            let app = Router::new()
+                .route("/health", get(health))
+                .route("/api/status", get(status));
+            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            loop {
+                if let Ok((stream, _)) = listener.accept().await {
+                    let _ = stream.set_nodelay(true);
+                    let io = TokioIo::new(stream);
+                    let svc = TowerToHyperService::new(app.clone());
+                    tokio::spawn(async move {
+                        let _ = http1::Builder::new()
+                            .pipeline_flush(true)
+                            .serve_connection(io, svc)
+                            .await;
+                    });
+                }
+            }
+        }
+        EOF
+        RUN cargo build --release && cp target/release/rust_axum_bench /usr/local/bin/rust-server
+
+        FROM debian:bookworm-slim
+        COPY --from=build /usr/local/bin/rust-server /usr/local/bin/rust-server
+        EXPOSE 5000/tcp
+        ENTRYPOINT ["/usr/local/bin/rust-server", "0.0.0.0:5000"]
+    container_name: rust-axum-bench-server
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+
+  benchmark-runner:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM mcr.microsoft.com/dotnet/sdk:9.0-noble AS build
+        WORKDIR /src
+        COPY global.json* Directory.Build.props* Directory.Packages.props* .editorconfig* ./
+        COPY THIRD-PARTY-NOTICES.md LICENSE* ./
+        COPY src/ ./src/
+        COPY samples/ ./samples/
+        COPY benchmarks/ ./benchmarks/
+        RUN dotnet publish "./benchmarks/Hayabusa.Benchmarks/Hayabusa.Benchmarks.csproj" \
+            -c Release -f net9.0 -o /app/bench
+
+        FROM mcr.microsoft.com/dotnet/runtime:9.0-noble
+        WORKDIR /app
+        COPY --from=build /app/bench ./
+        ENTRYPOINT ["dotnet", "Hayabusa.Benchmarks.dll", "--cross-lang"]
+    container_name: hayabusa-bench-runner
+    depends_on:
+      - hayabusa
+      - go-std
+      - rust-axum
+    environment:
+      HAYABUSA_BENCH_URL: "http://hayabusa:5000"
+      GO_BENCH_URL: "http://go-std:5000"
+      RUST_BENCH_URL: "http://rust-axum:5000"
+      BENCH_CONNECTIONS: "${BENCH_CONNECTIONS:-16}"
+      BENCH_REQUESTS: "${BENCH_REQUESTS:-32000}"
+      BENCH_WARMUP: "${BENCH_WARMUP:-8000}"
+      BENCH_PIPELINE: "${BENCH_PIPELINE:-16}"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
