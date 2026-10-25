@@ -1,14 +1,14 @@
 # Hayabusa (隼)
 
-**Cysharp エコシステムフル活用 × ゲームサーバー兼用の次世代 C# ハイパフォーマンス Web / RPC サーバーフレームワーク**
+**Cysharp エコシステムフル活用 × Kestrel / ASP.NET Core / MagicOnion ハイブリッド対応の次世代 C# ハイパフォーマンス Web / RPC / リアルタイムゲームサーバーフレームワーク**
 
-`Hayabusa` は、ASP.NET Core (Kestrel) の汎用的な抽象化コストを極限まで削ぎ落とし、**ゼロアロケーション・構造体・C# Source Generator・アンマネージド/Pinned メモリ・Thread-per-Core イベントループ**によって、**「Kestrel を超えるステートレス API / RPC 性能」**と**「60fps/30fps の Tick 同期・Room (Actor) 状態管理を内包したリアルタイムゲームサーバー」**を単一ランタイムで両立する次世代サーバーエンジンです。
+`Hayabusa` は、ASP.NET Core (Kestrel) や gRPC の汎用的な抽象化コストを極限まで削ぎ落とし、**ゼロアロケーション・構造体・C# Incremental Source Generator・アンマネージド/Pinned メモリ・Thread-per-Core イベントループ**によって、**「Kestrel を超えるステートレス API / RPC 性能」**と**「MagicOnion (`IService<T>` / `IStreamingHub<THub, TReceiver>`) 互換の超低実装コスト」**、そして**「60fps/30fps の Tick 同期・Room (Actor) 状態管理を内包したリアルタイムゲームサーバー」**を単一ランタイムで両立する次世代サーバーエンジンです。
 
 ---
 
 ## コンセプトと解決する課題
 
-Kestrel と ASP.NET Core は優れた汎用 Web サーバーですが、極限の低遅延・高スループットやリアルタイムゲームサーバーの領域では以下の構造的ボトルネックが存在します。
+Kestrel や ASP.NET Core、gRPC ベースの RPC 基盤は優れた汎用フレームワークですが、極限の低遅延・高スループットやリアルタイムゲームサーバーの領域では以下の構造的ボトルネックが存在します。
 
 1. **`PipeReader` / `PipeWriter` とマルチセグメント処理のオーバーヘッド**:
    - 大半の API / RPC フレームは単一の連続メモリ（数 KB 以内）に収まるにもかかわらず、常に連結リスト構造（`ReadOnlySequence<byte>`）の分岐とスレッド間バックプレッシャー同期コストを支払っている。
@@ -27,13 +27,13 @@ Kestrel と ASP.NET Core は優れた汎用 Web サーバーですが、極限�
 
 | レイヤー | Kestrel / ASP.NET Core 標準 | `Hayabusa` のアプローチ（Cysharp 流） |
 | --- | --- | --- |
-| **非同期・スレッド制御** | `Task` / `ValueTask` + `ThreadPool` | `UniTask` / カスタム `IValueTaskSource` + **Thread-per-Core 固定イベントループ**（アロケーションゼロ・コンテキストスイッチ排除） |
-| **I/O トランスポート** | `Socket` + `PipeReader` (`epoll` / `IOCP`) | **Completion（完了通知）モデル抽象化**（Linux **`io_uring`** 最優先 + Windows **`IOCP`** 拡張可能）+ Thread-Local Pinned Slab |
-| **シリアライズ** | `System.Text.Json` / Protobuf | **`MemoryPack`**（`ReadOnlySpan<byte>` 直結デシリアライズ & `IBufferWriter<byte>` 直書きによるコピーゼロ通信） |
-| **文字列・バッファ生成** | `StringBuilder` / `string.Format` | **`ZString`** + `IBufferWriter<byte>` 直接書き込み |
+| **非同期・スレッド制御** | `Task` / `ValueTask` + `ThreadPool` | `UniTask` / `ValueTask` + **Thread-per-Core 固定イベントループ**（アロケーションゼロ・コンテキストスイッチ排除） |
+| **I/O トランスポート** | `Socket` + `PipeReader` (`epoll` / `IOCP`) | **Completion（完了通知）モデル抽象化**（Linux **`io_uring`** 最優先 + Windows **`IOCP`** / `SO_REUSEPORT` 対応）+ Thread-Local Pinned Slab |
+| **シリアライズ** | `System.Text.Json` / Protobuf | **`MemoryPack`**（`ReadOnlySpan<byte>` 直結デシリアライズ & `IBufferWriter<byte>` 長さバックパッチ直書きによるコピーゼロ通信） |
+| **文字列・バッファ生成** | `StringBuilder` / `string.Format` | **`ZString`** + `IBufferWriter<byte>` 直接書き込み + 1秒キャッシュ RFC 1123 Date ヘッダー |
 | **ロギング** | `Microsoft.Extensions.Logging` | **`ZLogger`**（String Interpolation + UTF-8 直接書き込みによるゼロアロケーション構造化ログ） |
 | **リアクティブ・購読管理** | C# `event` / `IObservable<T>` | **`R3`**（`DisposableBag` による購読リークの完全防止・イベントストリーム制御） |
-| **ルーティング & RPC** | 実行時ルーティング / リフレクション / gRPC | **C# Incremental Source Generator**（コンパイル時 Radix Trie 木 & `MethodId` ジャンプテーブル生成・NativeAOT 完全対応） |
+| **ルーティング & RPC** | 実行時ルーティング / リフレクション / gRPC | **C# Incremental Source Generator**（コンパイル時 `MethodId` ジャンプテーブル & StreamingHub Broadcaster/ClientBinder 生成・NativeAOT 完全対応） |
 
 ### 2. Thread-per-Core + LogicLooper 風 Tick ループ & Room (Actor) アフィニティ
 
@@ -64,15 +64,22 @@ CPU コアごとに1本の専用ワーカースレッドを起動し、**「ネ�
   - 各 `RoomActor` は特定の `CoreIndex`（ワーカースレッド）にピン留め（アフィニティ固定）されます。
   - その Room のフィールドや `Dictionary` / `List` は割り当てられたスレッドからしか実行されないため、**ゲームロジック内で `lock` や `SemaphoreSlim` を一切書く必要がありません**。
 
-### 3. 2つの開発者体験（Source Generator 属性ルーティング & Minimal API 風）
+### 3. MagicOnion Server + Client 互換開発体験 & Minimal API ハイブリッド
 
-用途に応じて、MagicOnion 風の型安全な RPC サービス定義と、ASP.NET Core の Minimal API 風記法の両方をサポートし、どちらも Source Generator によって同じゼロオーバーヘッドなディスパッチコードへコンパイルされます。
+用途に応じて、**MagicOnion 互換のインターフェース契約 (`IService<T>` / `IStreamingHub<THub, TReceiver>`)**、**クラス直書きのコンパクト `[HayabusaService]`**、**ASP.NET Core の Minimal API 風記法**のすべてをサポートし、どれも同じゼロアロケーションなディスパッチコードへコンパイルされます。
 
-#### スタイル A: 属性ベース RPC / サービス定義（Source Generator）
+#### スタイル A: MagicOnion 風 StreamingHub / Unary Service & コンパクト RPC（Source Generator）
+
+- **`MethodId` 自動採番**: `[Rpc]` に番号を指定しない場合、`ServiceName.MethodName` の決定論的 31-bit FNV-1a ハッシュが自動割り当てされます。
+- **複数引数の自動タプル展開**: 専用 Request DTO を作らなくても、`Teleport(float x, float y, float z)` のように複数引数を直接定義でき、Source Generator が裏で `ValueTuple` として MemoryPack シリアライズします。
+- **`[HayabusaHubReceiver]` による Server-to-Client Push**: Receiver インターフェースを定義するだけで、サーバー側のゼロコピー 0 B ブロードキャスト拡張（`this.BroadcastOnWorldTick(snapshot)`）とクライアント側の Receiver 自動バインダー（`client.InnerClient.BindReceiver(receiver)`）が自動生成されます。
 
 ```csharp
+using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Rpc;
+using Hayabusa.Runtime.Rooms;
 using MemoryPack;
 
 [MemoryPackable]
@@ -81,41 +88,115 @@ public readonly partial record struct MoveCommand(float X, float Y, float Z);
 [MemoryPackable]
 public readonly partial record struct WorldSnapshot(TickNumber Tick, int PlayerCount);
 
+// 1. サーバーからクライアントへの Push 通知契約 (Broadcaster & ClientBinder が自動生成される)
+[HayabusaHubReceiver]
+public interface IBattleHubReceiver
+{
+    [Rpc(MethodId = 100)]
+    void OnWorldTick(WorldSnapshot snapshot);
+}
+
+// 2. MagicOnion 互換の StreamingHub / Unary 契約インターフェース
+public interface IBattleRoomHub : IStreamingHub<IBattleRoomHub, IBattleHubReceiver>
+{
+    [Rpc(MethodId = 1)]
+    ValueTask<WorldSnapshot> MoveAsync(MoveCommand command);
+}
+
+// 3. サーバー実装 (同一コアにピン留めされているため lock 不要)
 [HayabusaService]
-public partial class BattleRoomService : RoomActor
+public sealed partial class BattleRoomService : RoomActor, IBattleRoomHub
 {
     [Rpc(MethodId = 1)]
     public ValueTask<WorldSnapshot> MoveAsync(MoveCommand command)
     {
-        // 同一コアにピン留めされているため lock 不要でインメモリ状態を高速更新
         UpdatePlayerPosition(Context.ConnectionId, command);
         return new ValueTask<WorldSnapshot>(new WorldSnapshot(CurrentTick, PlayerCount));
     }
 
+    // MethodId 省略 + 複数引数 + 同期戻り値のコンパクト記法もそのまま動作
+    [Rpc]
+    public WorldSnapshot Teleport(float x, float y, float z)
+    {
+        UpdatePlayerPosition(Context.ConnectionId, new MoveCommand(x, y, z));
+        return new WorldSnapshot(CurrentTick, PlayerCount);
+    }
+
     protected override void OnTick(TickNumber tick)
     {
-        // 60fps / 30fps の定周期でワーカースレッドから直接呼ばれる
-        BroadcastWorldState(tick);
+        // 60fps の定周期でワーカースレッドから直接呼ばれ、1回のシリアライズで全クライアントへ 0B 配信
+        var snapshot = new WorldSnapshot(tick, PlayerCount);
+        _ = this.BroadcastOnWorldTick(snapshot);
     }
 }
 ```
 
-#### スタイル B: Minimal API 風エンドポイント定義
+#### スタイル B: Minimal API 風エンドポイント定義 & Web/RPC ハイブリッド
 
 ```csharp
 var app = HayabusaApp.CreateBuilder(args)
     .UseThreadPerCore(options => options.TickRate = 60)
     .Build();
 
-app.MapRpc<MoveCommand, WorldSnapshot>(methodId: 1, static (ctx, cmd) =>
-{
-    return new WorldSnapshot(ctx.CurrentTick, 1);
-});
+app.RegisterRoom<BattleRoomService>(new RoomId(1UL));
+
+// コンテキスト不要のラムダ式でも 1 行で登録可能
+app.MapRpc<MoveCommand, WorldSnapshot>(methodId: 2, static cmd =>
+    new WorldSnapshot(TickNumber.Zero, cmd.X >= 0 ? 1 : 0));
 
 app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+app.MapGet("/api/status", static ctx => ctx.WriteJsonUtf8("""{"status":"ok","engine":"Hayabusa"}"""u8));
 
 await app.RunAsync();
 ```
+
+### 4. Unity / Blazor (Server & WASM) / ASP.NET Core (Kestrel) から 1 行で繋がる統合クライアント
+
+Source Generator が自動生成する `<ServiceName>Client`（例: `BattleRoomServiceClient`）は、実行環境に応じて **3つのトランスポート（TCP / HTTP トンネル / In-Memory）** を完全に同一の C# コードで切り替えられます。
+
+| クライアント環境 | 生成ファクトリメソッド | 通信経路・特徴 |
+| --- | --- | --- |
+| **Unity (Desktop / Mobile / Console)** / .NET クライアント | `await BattleRoomServiceClient.ConnectAsync(host, 5001)` | `TCP_NODELAY` 有効の生 TCP ソケットによる最速バイナリ RPC & 60fps Broadcast ストリーム受信 |
+| **Blazor WebAssembly (WASM)** / Unity WebGL / リバースプロキシ配下 | `BattleRoomServiceClient.CreateHttp(httpClient, "/rpc")` | 生 TCP が使えないブラウザ環境から HTTP `POST /rpc` (`application/x-memorypack`) + CORS (`OPTIONS`) 自動応答でそのままバイナリ RPC を実行 |
+| **Blazor Interactive Server** / **ASP.NET Core (Kestrel) 同一プロセス** | `BattleRoomServiceClient.CreateInMemory(app.Dispatcher)`<br>または `HayabusaHybridBridge` | ソケットやループバック通信すら介さず、同一プロセス内の `HayabusaApp` にゼロコピー・インメモリ直結 |
+
+```csharp
+// Unity / Blazor / .NET クライアント共通コード
+public sealed class GamePresenter : IBattleHubReceiver
+{
+    public void OnWorldTick(WorldSnapshot snapshot)
+    {
+        // サーバーからの 60fps OnTick ブロードキャストを受信
+    }
+}
+
+// 1. 接続（TCP / HTTP / InMemory のいずれでも同じインターフェース）
+using var client = await BattleRoomServiceClient.ConnectAsync("127.0.0.1", 5001);
+
+// 2. StreamingHub Receiver のバインド（R3 の DisposableBag にも対応）
+using IDisposable subscription = client.InnerClient.BindReceiver(new GamePresenter());
+
+// 3. RPC 呼び出し（単一 DTO も複数引数メソッドも型安全に await）
+WorldSnapshot s1 = await client.MoveAsync(new MoveCommand(10f, 0f, -5f));
+WorldSnapshot s2 = await client.TeleportAsync(100f, 20f, 300f);
+```
+
+---
+
+## ベンチマーク結果（`Hayabusa.Benchmarks`）
+
+`dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -f net9.0 -- --quick-compare` による実測比較結果です。すべてのホットパスで **ヒープアロケーション完全ゼロ（`0 B/op`）** を達成しています。
+
+| ベンチマーク項目 | レイテンシ (`ns/op`) | スループット (`ops/s`) | アロケーション (`B/op`) | 比較倍率 |
+| --- | ---: | ---: | ---: | --- |
+| **1. HTTP Parse + Routing (`Hayabusa`)** | **947.5 ns** | **1,055,455 ops/s** | **0 B** | **約 1.4 倍高速 & 0 B** |
+| 1. HTTP Parse + Routing (`PipeReader` + String Baseline) | 1,302.5 ns | 767,777 ops/s | 840 B | ベースライン |
+| **2. HTTP 16x Pipelined Batch (`Hayabusa` Coalesced)** | **7,558.8 ns** (472 ns/req) | **132,295 batches/s** (211万 req/s) | **0 B** | **バッチ一括応答 & 0 B** |
+| **3. Unary RPC Echo (`Hayabusa` MemoryPack)** | **208.4 ns** | **4,797,958 ops/s** | **0 B** | **約 30 倍高速 & 0 B** |
+| 3. Unary RPC Echo (`System.Text.Json` + `Task` Baseline) | 6,240.5 ns | 160,244 ops/s | 312 B | ベースライン |
+| **4. Room Broadcast 100 Players (`Hayabusa` Zero-Copy)** | **2,046.2 ns** | **488,709 ops/s** | **0 B** | **約 19 倍高速 & 0 B** |
+| 4. Room Broadcast 100 Players (`Task.WhenAll` + JSON Baseline) | 38,462.5 ns | 25,999 ops/s | 52,632 B | ベースライン |
+| **5. Tick 1,000 Rooms (`Hayabusa` LogicLooper)** | **9,534.3 ns** | **104,884 ticks/s** | **0 B** | **1,000 Room 9.5μs & 0 B** |
 
 ---
 
@@ -151,28 +232,47 @@ hayabusa/
 ├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文
 ├── src/
 │   ├── Hayabusa.Core/               # 強い型プリミティブ、軽量Context、Pinned Slab/RingBuffer、Completion I/O 抽象
-│   ├── Hayabusa.Transport/          # Linux io_uring ネイティブ実装 & Windows IOCP / Socket 実装 & InMemoryTransport
-│   ├── Hayabusa.Runtime/            # Thread-per-Core イベントループ、LogicLooper 風 Tick スケジューラ、Room(Actor) 管理
-│   ├── Hayabusa.Rpc/                # MemoryPack RPC フレーム処理、HTTP 最小パーサ、ルーティング基盤
-│   └── Hayabusa.Generator/          # Incremental Source Generator (RPC ディスパッチャ・Radix Trie・クライアント生成)
+│   ├── Hayabusa.Transport/          # Linux io_uring ネイティブ実装 & Cross-Platform SocketEventTransport & InMemoryTransport
+│   ├── Hayabusa.Runtime/            # Thread-per-Core イベントループ、LogicLooper 風 Tick スケジューラ、Room(Actor) 管理、HayabusaHybridBridge
+│   ├── Hayabusa.Rpc/                # MemoryPack RPC フレーム処理、HTTP/CORS パーサ、POST /rpc トンネル、HayabusaRpcClient
+│   └── Hayabusa.Generator/          # Incremental Source Generator (RPC ディスパッチャ・StreamingHub Broadcaster/Binder・クライアント生成)
 ├── templates/
 │   └── Hayabusa.Templates/          # `dotnet new hayabusa-server` 用プロジェクトテンプレート
 ├── samples/
-│   └── Hayabusa.SampleServer/       # MemoryPack RPC + Room Tick 同期サンプルサーバー
+│   └── Hayabusa.SampleServer/       # MagicOnion 風 StreamingHub + MemoryPack RPC + Room Tick 同期サンプルサーバー
 ├── benchmarks/
-│   └── Hayabusa.Benchmarks/         # BenchmarkDotNet スイート (Kestrel / gRPC 比較・0B アロケーション検証)
+│   └── Hayabusa.Benchmarks/         # BenchmarkDotNet スイート (Kestrel / JSON / Task 比較・0B アロケーション検証)
 └── tests/
-    ├── Hayabusa.Tests/              # 単体テスト・Source Generator テスト・ゼロリーク検証
-    └── Hayabusa.PenetrationTests/   # 悪意あるペイロード・Length Bomb・Slowloris・ファジング検証
+    ├── Hayabusa.Tests/              # 単体テスト・Source Generator テスト・ゼロリーク検証 (33件)
+    └── Hayabusa.PenetrationTests/   # 悪意あるペイロード・Length Bomb・Slowloris・ファジング検証 (20件)
 ```
 
 ---
 
 ## クイックスタート（サーバーの立ち上げ方・ローカル開発環境）
 
-さまざまな開発者・運用者が用途に応じてすぐに `Hayabusa` サーバーを立てて使用できるよう、以下の方法を用意しています。
+### 1. `.NET SDK` でローカル起動する（.NET 9 / .NET 10 マルチターゲット・Windows / macOS / Linux 対応）
 
-### 1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）
+`Directory.Build.props` と `global.json`（`rollForward: latestMajor`）により、**`.NET 9.0`（`net9.0`）と `.NET 10.0`（`net10.0`）の両方に標準でマルチターゲット対応**しています（将来の `.NET 11.0+` も自動認識）。
+
+```bash
+# .NET 10 (net10.0) または .NET 9 (net9.0) を指定してサンプルサーバーを起動（HTTP: 5000, MemoryPack RPC / Room: 5001）
+dotnet run --project samples/Hayabusa.SampleServer/Hayabusa.SampleServer.csproj -c Release -f net10.0 -- \
+  --bind 127.0.0.1 \
+  --http-port 5000 \
+  --rpc-port 5001 \
+  --workers 1 \
+  --tick-rate 60
+```
+
+起動後、別ターミナルから HTTP ヘルスチェックやステータス API を確認できます：
+
+```bash
+curl -i http://127.0.0.1:5000/health
+curl -i http://127.0.0.1:5000/api/status
+```
+
+### 2. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）
 
 Docker さえあれば、1コマンドで `io_uring` 最適化設定済みの `Hayabusa` サーバーを起動できます。
 
@@ -180,7 +280,7 @@ Docker さえあれば、1コマンドで `io_uring` 最適化設定済みの `H
 # 設定をカスタマイズする場合は .env を作成（省略時はデフォルト値で起動）
 cp .env.example .env
 
-# サーバーのビルドと起動（HTTP: 5000, MemoryPack RPC / Room: 5001）
+# サーバーのビルドと起動
 docker compose up -d --build
 ```
 
@@ -190,7 +290,7 @@ NativeAOT シングルバイナリとしてビルドしたい場合は `PUBLISH_
 docker compose build --build-arg PUBLISH_AOT=true
 ```
 
-### 2. 環境変数・起動オプションによるゼロコンフィグ設定 & ロール分離（Web単体 / ゲーム単体 / 両方）
+### 3. 環境変数・起動オプションによるゼロコンフィグ設定 & ロール分離（Web単体 / ゲーム単体 / 両方）
 
 コードを書き換えることなく、環境変数（または CLI 引数 `--role` / `--web-only` / `--game-only` / `--web-and-game`）によって、**「Web サーバー単体」「ゲームサーバー単体」「Web + ゲームハイブリッド（両方受け入れ）」** の3つの形態を切り替えて起動できます。また、`IGameLoopTickHandler` により MagicOnion 風サービスだけでなく独自 ECS や物理エンジン等のカスタムゲームループもそのまま組み込めます。
 
@@ -209,15 +309,13 @@ var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 50
 | --- | --- | --- | --- |
 | `HAYABUSA_ROLE` | `--role` (`--web-only` / `--game-only` / `--web-and-game`) | `both` (`WebAndGame`) | `web`（Web サーバー単体）、`game`（ゲームサーバー単体）、`both`（Web・ゲーム両方受け入れ） |
 | `HAYABUSA_BIND_ADDRESS` | `--bind` | `0.0.0.0` | バインドする IP アドレス |
-| `HAYABUSA_HTTP_PORT` | `--http-port` | `5000` | HTTP / Minimal API 待ち受けポート |
-| `HAYABUSA_RPC_PORT` | `--rpc-port` | `5001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
+| `HAYABUSA_HTTP_PORT` | `--http-port` | `5000` (`.env.example`: `8000`) | HTTP / Minimal API / `POST /rpc` トンネル待ち受けポート |
+| `HAYABUSA_RPC_PORT` | `--rpc-port` | `5001` (`.env.example`: `8001`) | MemoryPack RPC / リアルタイム Room (TCP) 待ち受けポート |
 | `HAYABUSA_WORKER_THREADS` | `--workers` | `0` | Thread-per-Core スレッド数（`0` でコンテナの CPU コア数を自動検出） |
 | `HAYABUSA_TICK_RATE` | `--tick-rate` | `60` | Room (Actor) の定周期 Tick レート（Hz: `60` = 60fps、`30` = 30fps） |
-| `HAYABUSA_TRANSPORT` | `--transport` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket` |
+| `HAYABUSA_TRANSPORT` | `--transport` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket`、`inmemory` |
 
-### 3. 自分のプロジェクトで Hayabusa サーバーを作る（NuGet / `dotnet new` テンプレート）
-
-他の開発者が独自のゲームサーバーや Web/RPC サーバーを構築する際は、以下の2通りの方法で導入できるようにします（Phase 1〜3 でパッケージ公開対応）。
+### 4. 自分のプロジェクトで Hayabusa サーバーを作る（NuGet / `dotnet new` テンプレート）
 
 ```bash
 # 方法A: プロジェクトテンプレートから新規サーバーを一発作成
@@ -227,10 +325,10 @@ cd MyGameServer && dotnet run
 
 # 方法B: 既存の .NET 9+ プロジェクトに NuGet パッケージを追加
 dotnet add package Hayabusa
-dotnet add package Hayabusa.Client   # Unity / .NET クライアント共有用
+dotnet add package Hayabusa.Client   # Unity / Blazor / .NET クライアント共有用
 ```
 
-### 4. `.devcontainer` を使ったローカル開発（Cursor / VS Code 対応）
+### 5. `.devcontainer` を使ったローカル開発（Cursor / VS Code 対応）
 
 Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor または VS Code で開いて **「Reopen in Container」** を実行するだけで、以下の開発環境が自動的に構築されます。
 
@@ -241,9 +339,9 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 
 ---
 
-## Cysharp OSS の導入状況と統合計画
+## Cysharp OSS の導入状況と統合
 
-`Hayabusa` は **Phase 0 〜 Phase 5 の全コア実装が完了** しており、`Directory.Packages.props` による中央パッケージ管理の下で以下の Cysharp OSS 群を統合しています。
+`Hayabusa` は **Phase 0 〜 Phase 5 の全コア実装およびハイブリッド拡張が完了** しており、`Directory.Packages.props` による中央パッケージ管理の下で以下の Cysharp OSS 群を統合しています。
 
 | OSS ライブラリ | 形態 | 現在の状態 | 導入フェーズ | `Hayabusa` での役割 | ライセンス |
 | --- | --- | --- | --- | --- | --- |
@@ -253,7 +351,7 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 | **[R3](https://github.com/Cysharp/R3)** | NuGet 導入 | **導入・実装済** | **Phase 2** (`Hayabusa.Runtime`) | `DisposableBag` による購読ライフサイクル管理（イベントリーク防止）・リアクティブ制御 | MIT License |
 | **[UniTask](https://github.com/Cysharp/UniTask)** | NuGet / 思想統合 | **導入・実装済** | **Phase 2** (`Hayabusa.Runtime`) | Thread-per-Core ループ上のゼロアロケーション非同期制御（標準 `ValueTask` / `IValueTaskSource` と併用） | MIT License |
 | **[LogicLooper](https://github.com/Cysharp/LogicLooper)** | アーキテクチャ統合 | **実装済** | **Phase 2** (`Hayabusa.Runtime`) | I/O イベントループと一体化した 60fps/30fps 定周期 Tick スケジューラ（`LogicTickScheduler`） | MIT License |
-| **[MagicOnion](https://github.com/Cysharp/MagicOnion)** | API 体験モデル | **実装済** | **Phase 1 & 3** (`Rpc` / `Generator`) | `[HayabusaService]` / `[Rpc]` による C# ファーストな RPC 開発体験のモデル（通信層は独自実装） | MIT License |
+| **[MagicOnion](https://github.com/Cysharp/MagicOnion)** | API 体験モデル | **実装済** | **Phase 1 & 3** (`Rpc` / `Generator`) | `IService<T>` / `IStreamingHub<THub, TReceiver>` / `[HayabusaService]` / `[HayabusaHubReceiver]` による C# ファーストな RPC & StreamingHub 体験（通信層は独自実装） | MIT License |
 
 ---
 
@@ -285,16 +383,16 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 - [x] **Phase 1: `Hayabusa.Core` & `Hayabusa.Rpc` コア基盤実装**
   - 強い型プリミティブ（`ConnectionId`, `RoomId`, `MethodId`, `TickNumber`, `CoreIndex`）
   - Thread-Local Slab Pool / Pinned RingBuffer & リーク検知機構
-  - MemoryPack RPC フレームパーサ & 最小 HTTP パーサ（単体テスト & ペネトレーションテスト含む）
+  - MemoryPack RPC フレームパーサ & 最小 HTTP/CORS パーサ（単体テスト & ペネトレーションテスト含む）
 - [x] **Phase 2: `Hayabusa.Runtime`（Thread-per-Core + LogicLooper 風 Tick + Room Actor）実装**
   - コア固定ワーカースレッド、ロックフリー MPSC Mailbox、Timing Wheel タイムアウト管理
-  - `RoomActor` 基底クラスと定周期 Tick スケジューラ
+  - `RoomActor` 基底クラス、定周期 Tick スケジューラ、Kestrel / ASP.NET Core ハイブリッド統合ブリッジ（`HayabusaHybridBridge`）
 - [x] **Phase 3: `Hayabusa.Generator`（C# Incremental Source Generator）実装**
-  - `[HayabusaService]` / `[Rpc]` / `[Get]` / `[Post]` からのゼロアロケーションディスパッチャ & クライアント自動生成
+  - `[HayabusaService]` / `IService<T>` / `IStreamingHub<THub, TReceiver>` / `[HayabusaHubReceiver]` からのゼロアロケーションディスパッチャ、Broadcaster、ClientBinder、および TCP / HTTP / InMemory 統合クライアント自動生成
 - [x] **Phase 4: `Hayabusa.Transport`（Linux `io_uring` & Cross-Platform Socket IOCP）実装**
   - Completion トランスポート層とバッチ Submit パイプライン
 - [x] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
-  - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
+  - Kestrel / MagicOnion スタイルとのベンチマーク比較とリアルタイムゲームルームデモ
 
 ---
 
@@ -312,4 +410,3 @@ MIT ライセンスの規約を遵守するため、本リポジトリでは以�
    - MIT ライセンスのコード断片を移植・改変して組み込む場合は、該当ソースファイル先頭および [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) に原著作権表示を明記します（[`.cursor/skills/coding-standards/SKILL.md`](.cursor/skills/coding-standards/SKILL.md) 第7節で規約化済み）。
 3. **非公式プロジェクトであることの明示（Disclaimer）**:
    - `Hayabusa` は Cysharp 社の OSS エコシステムと設計思想に深く敬意を表して開発されている**独立したオープンソースプロジェクト**であり、**Cysharp, Inc. の公式製品および提携プロジェクトではありません**。パッケージ名や名前空間にも `Cysharp.*` は使用せず、`Hayabusa.*` を使用します。
-
