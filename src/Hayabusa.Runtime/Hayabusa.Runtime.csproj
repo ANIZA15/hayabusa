@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Hayabusa.Runtime</AssemblyName>
+    <RootNamespace>Hayabusa.Runtime</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Thread-per-Core event loop, LogicLooper-inspired deterministic tick scheduler, and lock-free RoomActor runtime for Hayabusa.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hayabusa.Core\Hayabusa.Core.csproj" />
+    <ProjectReference Include="..\Hayabusa.Rpc\Hayabusa.Rpc.csproj" />
+    <ProjectReference Include="..\Hayabusa.Transport\Hayabusa.Transport.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MemoryPack" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="R3" />
+    <PackageReference Include="UniTask" />
+    <PackageReference Include="ZLogger" />
+    <PackageReference Include="ZString" />
+  </ItemGroup>
+</Project>

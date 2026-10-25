@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Hayabusa.Transport</AssemblyName>
+    <RootNamespace>Hayabusa.Transport</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Completion-based I/O transport backends for Hayabusa (Linux io_uring, Cross-Platform Socket/IOCP, and InMemoryTransport).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hayabusa.Core\Hayabusa.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="ZLogger" />
+  </ItemGroup>
+</Project>
