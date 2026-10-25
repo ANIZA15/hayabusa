@@ -144,6 +144,8 @@ hayabusa/
 ├── docker-compose.yml               # ワンコマンドで Hayabusa サーバーを立ち上げる Compose 設定
 ├── .env.example                     # サーバー起動パラメータ（ポート・TickRate・Transport）の設定サンプル
 ├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定 (.NET 9 / .NET 10 / .NET 11+ マルチターゲット)・ライセンス同梱設定
+├── Directory.Packages.props         # 中央パッケージ管理 (Central Package Management)
+├── Hayabusa.slnx                    # XML ベースの新ソリューションファイル (.slnx)
 ├── .editorconfig                    # コードスタイル & 複雑度 (CA1502) / 型厳格 (CS8509) 強制設定
 ├── global.json                      # .NET 9 / .NET 10 / .NET 11+ SDK ロールフォワード設定 (latestMajor)
 ├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文

@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Hayabusa.Benchmarks/Hayabusa.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Hayabusa.SampleServer/Hayabusa.SampleServer.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Hayabusa.Core/Hayabusa.Core.csproj" />
+    <Project Path="src/Hayabusa.Generator/Hayabusa.Generator.csproj" />
+    <Project Path="src/Hayabusa.Rpc/Hayabusa.Rpc.csproj" />
+    <Project Path="src/Hayabusa.Runtime/Hayabusa.Runtime.csproj" />
+    <Project Path="src/Hayabusa.Transport/Hayabusa.Transport.csproj" />
+  </Folder>
+  <Folder Name="/templates/">
+    <Project Path="templates/Hayabusa.Templates/Hayabusa.Templates.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hayabusa.PenetrationTests/Hayabusa.PenetrationTests.csproj" />
+    <Project Path="tests/Hayabusa.Tests/Hayabusa.Tests.csproj" />
+  </Folder>
+</Solution>
