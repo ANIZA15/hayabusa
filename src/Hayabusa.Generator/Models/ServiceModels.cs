@@ -87,3 +87,12 @@ public readonly record struct ServiceModel(
     EquatableArray<RpcMethodModel> RpcMethods,
     EquatableArray<HttpRouteModel> HttpRoutes,
     EquatableArray<EquatableDiagnostic> Diagnostics);
+
+/// <summary>
+/// Root value-equatable model for a `[HayabusaHubReceiver]` interface (MagicOnion StreamingHub receiver style).
+/// Contains zero references to <see cref="ISymbol"/> or <see cref="SyntaxNode"/>.
+/// </summary>
+public readonly record struct HubReceiverModel(
+    (string Namespace, string InterfaceName, string FullTypeName) Header,
+    EquatableArray<RpcMethodModel> Methods,
+    EquatableArray<EquatableDiagnostic> Diagnostics);

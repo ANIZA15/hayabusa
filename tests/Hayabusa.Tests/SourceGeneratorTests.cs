@@ -208,6 +208,44 @@ public sealed class SourceGeneratorTests
     }
 
     [Fact]
+    public void Generator_MagicOnionStyleIServiceAndHubReceiver_GeneratesBroadcasterBinderAndContractMethods()
+    {
+        const string source = """
+            using System.Threading.Tasks;
+            using Hayabusa.Rpc;
+            using MemoryPack;
+
+            namespace TestApp;
+
+            [MemoryPackable]
+            public readonly partial record struct ChatMessage(int UserId, int Code);
+
+            [HayabusaHubReceiver]
+            public interface IChatHubReceiver
+            {
+                void OnMessage(ChatMessage msg);
+            }
+
+            public interface IChatService : IService<IChatService>
+            {
+                ValueTask<ChatMessage> SendAsync(ChatMessage msg);
+            }
+
+            [HayabusaService]
+            public sealed partial class ChatService : IChatService
+            {
+                public ValueTask<ChatMessage> SendAsync(ChatMessage msg) => new(msg);
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGeneratorAndGetDiagnostics(source, out Compilation outputCompilation);
+
+        Assert.Empty(diagnostics);
+        Assert.Contains(outputCompilation.SyntaxTrees, static t => t.FilePath.EndsWith("IChatHubReceiver.HayabusaHubReceiver.g.cs", StringComparison.Ordinal));
+        Assert.Contains(outputCompilation.SyntaxTrees, static t => t.FilePath.EndsWith("ChatService.HayabusaService.g.cs", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Generator_WhenServiceUsesAutoMethodIdMultiParamsAndSyncReturn_GeneratesCleanCompilation()
     {
         const string source = """

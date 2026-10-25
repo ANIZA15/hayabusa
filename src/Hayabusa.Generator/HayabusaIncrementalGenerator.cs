@@ -9,13 +9,14 @@ using Microsoft.CodeAnalysis.Text;
 namespace Hayabusa.Generator;
 
 /// <summary>
-/// Roslyn Incremental Source Generator (<see cref="IIncrementalGenerator"/>) for Hayabusa RPC and HTTP services.
+/// Roslyn Incremental Source Generator (<see cref="IIncrementalGenerator"/>) for Hayabusa RPC, HTTP, and MagicOnion-style StreamingHub services.
 /// Uses <c>ForAttributeWithMetadataName</c> and value-equatable models to guarantee zero IDE cache thrashing.
 /// </summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class HayabusaIncrementalGenerator : IIncrementalGenerator
 {
     private const string HayabusaServiceAttributeFullName = "Hayabusa.Rpc.HayabusaServiceAttribute";
+    private const string HayabusaHubReceiverAttributeFullName = "Hayabusa.Rpc.HayabusaHubReceiverAttribute";
 
     /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -26,10 +27,17 @@ public sealed class HayabusaIncrementalGenerator : IIncrementalGenerator
                 predicate: static (node, _) => node is ClassDeclarationSyntax,
                 transform: ServiceModelParser.ExtractServiceModel);
 
-        context.RegisterSourceOutput(serviceModels, ExecuteEmission);
+        IncrementalValuesProvider<HubReceiverModel> receiverModels = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                fullyQualifiedMetadataName: HayabusaHubReceiverAttributeFullName,
+                predicate: static (node, _) => node is InterfaceDeclarationSyntax,
+                transform: ServiceModelParser.ExtractHubReceiverModel);
+
+        context.RegisterSourceOutput(serviceModels, ExecuteServiceEmission);
+        context.RegisterSourceOutput(receiverModels, ExecuteReceiverEmission);
     }
 
-    private static void ExecuteEmission(SourceProductionContext context, ServiceModel model)
+    private static void ExecuteServiceEmission(SourceProductionContext context, ServiceModel model)
     {
         ReportDiagnostics(context, model.Diagnostics);
         if (!model.Header.IsPartial || model.Diagnostics.Length > 0)
@@ -39,6 +47,19 @@ public sealed class HayabusaIncrementalGenerator : IIncrementalGenerator
 
         string source = ServiceCodeEmitter.EmitServiceSource(in model);
         string hintName = $"{model.Header.ClassName}.HayabusaService.g.cs";
+        context.AddSource(hintName, SourceText.From(source, Encoding.UTF8));
+    }
+
+    private static void ExecuteReceiverEmission(SourceProductionContext context, HubReceiverModel model)
+    {
+        ReportDiagnostics(context, model.Diagnostics);
+        if (model.Diagnostics.Length > 0)
+        {
+            return;
+        }
+
+        string source = ServiceCodeEmitter.EmitHubReceiverSource(in model);
+        string hintName = $"{model.Header.InterfaceName}.HayabusaHubReceiver.g.cs";
         context.AddSource(hintName, SourceText.From(source, Encoding.UTF8));
     }
 

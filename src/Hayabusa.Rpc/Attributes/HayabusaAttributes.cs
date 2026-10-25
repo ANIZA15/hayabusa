@@ -77,3 +77,35 @@ public sealed class PostAttribute : Attribute
     /// <summary>Gets the route path template.</summary>
     public string Template { get; }
 }
+
+/// <summary>
+/// Marks an interface as a server-to-client real-time push receiver contract (MagicOnion <c>IStreamingHub</c> receiver style)
+/// for compile-time generation of zero-allocation room broadcasters and client receiver binders.
+/// </summary>
+[AttributeUsage(AttributeTargets.Interface, Inherited = false, AllowMultiple = false)]
+public sealed class HayabusaHubReceiverAttribute : Attribute
+{
+}
+
+/// <summary>
+/// MagicOnion-compatible marker interface for strongly-typed unary RPC service contracts shared between client and server.
+/// </summary>
+/// <typeparam name="TSelf">The service interface type itself.</typeparam>
+#pragma warning disable CA1040 // Marker interface deliberately mirrors MagicOnion IService<TSelf> contract
+public interface IService<TSelf>
+    where TSelf : IService<TSelf>
+{
+}
+
+/// <summary>
+/// MagicOnion-compatible marker interface for real-time StreamingHub contracts shared between client and server,
+/// pairing a server hub interface (<typeparamref name="TSelf"/>) with a server-to-client receiver interface (<typeparamref name="TReceiver"/>).
+/// </summary>
+/// <typeparam name="TSelf">The hub interface type itself.</typeparam>
+/// <typeparam name="TReceiver">The client receiver interface type for server-to-client push notifications.</typeparam>
+public interface IStreamingHub<TSelf, TReceiver> : IService<TSelf>
+    where TSelf : IStreamingHub<TSelf, TReceiver>
+{
+}
+#pragma warning restore CA1040
+

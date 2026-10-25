@@ -354,7 +354,7 @@ public sealed class CoreWorker : IDisposable
             return false;
         }
 
-        return span[0] is (byte)'G' or (byte)'P' or (byte)'D' or (byte)'H';
+        return span[0] is (byte)'G' or (byte)'P' or (byte)'D' or (byte)'H' or (byte)'O';
     }
 
     private bool TryProcessHttpBuffer(ConnectionId connectionId, ContiguousReceiveBuffer buffer)
@@ -428,7 +428,7 @@ public sealed class CoreWorker : IDisposable
         try
         {
             _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick, clearWriter: false);
-            if (_dispatcher.TryDispatchSync(_context, in frame, _responseWriter))
+            if (_dispatcher.TryDispatchMinimalSync(_context, in frame, _responseWriter))
             {
                 return;
             }

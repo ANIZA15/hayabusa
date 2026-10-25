@@ -25,6 +25,9 @@ public enum HttpMethodKind : byte
 
     /// <summary>HTTP HEAD method.</summary>
     Head = 5,
+
+    /// <summary>HTTP OPTIONS method (used for CORS preflight requests).</summary>
+    Options = 6,
 }
 
 /// <summary>

@@ -414,6 +414,64 @@ public sealed class RuntimeAndRoomTests
     }
 
     [Fact]
+    public async Task HayabusaHybridBridge_MagicOnionStyleHubReceiverAndInProcessRpc_DeliversTypedResponsesAndBroadcasts()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TickRateHz: 50, TimeProvider: fakeTime), transport, dispatcher);
+        BattleRoomService room = worker.RoomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+        dispatcher.RegisterService(room);
+
+        var playerConn = new ConnectionId(1UL);
+        room.JoinPlayer(playerConn);
+
+        using var client = BattleRoomServiceClient.CreateInMemory(dispatcher);
+        var receiver = new RecordingBattleHubReceiver();
+        using IDisposable sub = client.InnerClient.BindReceiver(receiver);
+
+        WorldSnapshot unaryResult = await client.TeleportAsync(3f, 4f, 5f);
+        fakeTime.Advance(TimeSpan.FromMilliseconds(20));
+        worker.StepIteration();
+        int pumped = HayabusaHybridBridge.PumpInMemoryBroadcastsToClient(transport, playerConn, client.InnerClient);
+
+        Assert.Equal(1, unaryResult.PlayerCount);
+        Assert.True(pumped >= 1);
+        Assert.Equal(new TickNumber(1UL), receiver.LastSnapshot.Tick);
+    }
+
+    [Fact]
+    public void HayabusaHybridBridge_PostRpcHttpTunnel_ExecutesBinaryRpcOverHttpEndpoint()
+    {
+        using HayabusaApp app = Hayabusa.SampleServer.Program.CreateSampleApp(["--transport", "inmemory", "--workers", "1"]);
+        using var reqFrame = new PooledBufferWriter(128);
+        PooledBufferWriter fw = reqFrame;
+        BattleRoomServiceClient.WriteMoveAsyncRequest(ref fw, new MoveCommand(7f, 8f, 9f));
+
+        byte[] body = reqFrame.WrittenSpan.ToArray();
+        byte[] header = Encoding.ASCII.GetBytes($"POST /rpc HTTP/1.1\r\nHost: localhost\r\nContent-Length: {body.Length}\r\n\r\n");
+        byte[] fullHttp = new byte[header.Length + body.Length];
+        header.CopyTo(fullHttp, 0);
+        body.CopyTo(fullHttp, header.Length);
+
+        using var responseWriter = new PooledBufferWriter(1024);
+        bool handled = HayabusaHybridBridge.DispatchRawHttpRequest(app, fullHttp, responseWriter);
+
+        Assert.True(handled);
+        Assert.True(responseWriter.WrittenSpan.StartsWith("HTTP/1.1 200 OK\r\nContent-Type: application/x-memorypack"u8));
+    }
+
+    private sealed class RecordingBattleHubReceiver : IBattleHubReceiver
+    {
+        public WorldSnapshot LastSnapshot { get; private set; }
+
+        public void OnWorldTick(WorldSnapshot snapshot)
+        {
+            LastSnapshot = snapshot;
+        }
+    }
+
+    [Fact]
     public async Task BattleRoomServiceClient_CompactAutoMethodIdAndMultiParamRpc_RoundtripsViaGeneratedClient()
     {
         var dispatcher = new RpcDispatcher();

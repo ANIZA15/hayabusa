@@ -171,6 +171,7 @@ public static class HttpParser
                 _ => HttpMethodKind.Unknown,
             },
             6 => token.SequenceEqual("DELETE"u8) ? HttpMethodKind.Delete : HttpMethodKind.Unknown,
+            7 => token.SequenceEqual("OPTIONS"u8) ? HttpMethodKind.Options : HttpMethodKind.Unknown,
             _ => HttpMethodKind.Unknown,
         };
     }
