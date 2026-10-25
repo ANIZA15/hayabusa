@@ -158,16 +158,16 @@ public sealed class RuntimeHostingAndConcurrencyExtendedTests
 
         // Post and cross-thread Send enqueue into the work queue
         syncCtx.Post(_ => counter += 5, null);
-        bool observedNonOwnerOnBackgroundThread = false;
-        var bgThread = new Thread(() =>
+        bool observedNonOwnerThread = false;
+        var backgroundThread = new Thread(() =>
         {
-            observedNonOwnerOnBackgroundThread = !syncCtx.IsOnOwnerThread;
+            observedNonOwnerThread = !syncCtx.IsOnOwnerThread;
             syncCtx.Send(_ => counter += 20, null);
         });
-        bgThread.Start();
-        bgThread.Join();
+        backgroundThread.Start();
+        backgroundThread.Join();
 
-        Assert.True(observedNonOwnerOnBackgroundThread);
+        Assert.True(observedNonOwnerThread);
         Assert.Equal(10, counter);
         Assert.Equal(1, syncCtx.DrainContinuations(maxItems: 1));
         Assert.Equal(15, counter);

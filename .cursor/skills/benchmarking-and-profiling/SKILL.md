@@ -30,3 +30,19 @@ description: >-
 ## 3. 性能退行（Regression）の防止ルール
 
 - ホットパスの PR で `Allocated` が `0 B` から `1 B` 以上に増加した場合、またはスループットが 5% 以上低下した場合は、アーキテクチャ上の明確な理由がない限りマージ不可とする。
+
+## 4. クロス言語 Web サーバー比較ベンチマーク（Hayabusa vs Go `net/http` vs Rust `axum` / `tokio`）
+
+リポジトリ内に `.go` や `.rs` のソースファイルを一切置かず、Docker Compose の `dockerfile_inline`（または `/tmp` エフェメラルビルド）を用いて同一 HTTP/1.1 ワークロードで比較計測できる構成を維持します。
+
+```bash
+# 1. Docker Compose によるワンコマンド比較計測（推奨: コンテナ内で Go / Rust / Hayabusa をビルド＆計測）
+docker compose -f docker-compose.benchmarks.yml up --build --abort-on-container-exit
+
+# 2. ラッパースクリプトによる実行（Docker 利用可能なら Docker、非対応環境なら /tmp エフェメラル実行へ自動切替）
+./scripts/run-cross-lang-benchmarks.sh
+
+# 3. dotnet run から直接実行
+dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -- --cross-lang
+```
+

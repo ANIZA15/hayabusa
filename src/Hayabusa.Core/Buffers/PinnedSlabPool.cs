@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Hayabusa.Core.Buffers;
 
@@ -17,6 +18,7 @@ public sealed class PinnedSlabPool : IDisposable
     private readonly bool[] _rentedBySlot;
     private readonly int _blockSize;
     private readonly int _blockCount;
+    private SpinLock _lock = new(enableThreadOwnerTracking: false);
     private int _freeStackTop;
     private bool _disposed;
 
@@ -78,11 +80,30 @@ public sealed class PinnedSlabPool : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ScopedSlabRental RentScoped(int minimumSize = 1)
     {
-        ValidateRentRequest(minimumSize);
-        int slotIndex = _freeSlotStack[--_freeStackTop];
-        _rentedBySlot[slotIndex] = true;
-        uint generation = ++_generationBySlot[slotIndex];
-        return new ScopedSlabRental(this, slotIndex, generation);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(minimumSize, _blockSize);
+
+        bool lockTaken = false;
+        try
+        {
+            _lock.Enter(ref lockTaken);
+            if (_freeStackTop == 0)
+            {
+                throw new InvalidOperationException("PinnedSlabPool exhausted: all pre-allocated blocks are currently rented.");
+            }
+
+            int slotIndex = _freeSlotStack[--_freeStackTop];
+            _rentedBySlot[slotIndex] = true;
+            uint generation = ++_generationBySlot[slotIndex];
+            return new ScopedSlabRental(this, slotIndex, generation);
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _lock.Exit(useMemoryBarrier: false);
+            }
+        }
     }
 
     /// <summary>
@@ -91,17 +112,36 @@ public sealed class PinnedSlabPool : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryRentSlot(out int slotIndex, out uint generation)
     {
-        if (_disposed || _freeStackTop == 0)
+        if (_disposed)
         {
             slotIndex = -1;
             generation = 0;
             return false;
         }
 
-        slotIndex = _freeSlotStack[--_freeStackTop];
-        _rentedBySlot[slotIndex] = true;
-        generation = ++_generationBySlot[slotIndex];
-        return true;
+        bool lockTaken = false;
+        try
+        {
+            _lock.Enter(ref lockTaken);
+            if (_disposed || _freeStackTop == 0)
+            {
+                slotIndex = -1;
+                generation = 0;
+                return false;
+            }
+
+            slotIndex = _freeSlotStack[--_freeStackTop];
+            _rentedBySlot[slotIndex] = true;
+            generation = ++_generationBySlot[slotIndex];
+            return true;
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _lock.Exit(useMemoryBarrier: false);
+            }
+        }
     }
 
     /// <summary>
@@ -130,10 +170,22 @@ public sealed class PinnedSlabPool : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ReturnSlot(int slotIndex, uint generation)
     {
-        ValidateActiveSlot(slotIndex, generation);
-        _rentedBySlot[slotIndex] = false;
-        _generationBySlot[slotIndex]++;
-        _freeSlotStack[_freeStackTop++] = slotIndex;
+        bool lockTaken = false;
+        try
+        {
+            _lock.Enter(ref lockTaken);
+            ValidateActiveSlot(slotIndex, generation);
+            _rentedBySlot[slotIndex] = false;
+            _generationBySlot[slotIndex]++;
+            _freeSlotStack[_freeStackTop++] = slotIndex;
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _lock.Exit(useMemoryBarrier: false);
+            }
+        }
     }
 
     /// <summary>
@@ -142,14 +194,26 @@ public sealed class PinnedSlabPool : IDisposable
     public void ResetArena()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        for (int i = 0; i < _blockCount; i++)
+        bool lockTaken = false;
+        try
         {
-            _rentedBySlot[i] = false;
-            _generationBySlot[i]++;
-            _freeSlotStack[i] = _blockCount - 1 - i;
-        }
+            _lock.Enter(ref lockTaken);
+            for (int i = 0; i < _blockCount; i++)
+            {
+                _rentedBySlot[i] = false;
+                _generationBySlot[i]++;
+                _freeSlotStack[i] = _blockCount - 1 - i;
+            }
 
-        _freeStackTop = _blockCount;
+            _freeStackTop = _blockCount;
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                _lock.Exit(useMemoryBarrier: false);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -163,17 +227,6 @@ public sealed class PinnedSlabPool : IDisposable
         for (int i = 0; i < blockCount; i++)
         {
             _freeSlotStack[i] = blockCount - 1 - i;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateRentRequest(int minimumSize)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(minimumSize, _blockSize);
-        if (_freeStackTop == 0)
-        {
-            throw new InvalidOperationException("PinnedSlabPool exhausted: all pre-allocated blocks are currently rented.");
         }
     }
 

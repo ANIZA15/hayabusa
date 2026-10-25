@@ -23,6 +23,7 @@ public sealed class TimingWheel
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _frameReadTimeout;
     private readonly Dictionary<ConnectionId, ConnectionEntry> _entries = new(256);
+    private long _lastSweepTimestamp;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TimingWheel"/> class.
@@ -106,10 +107,20 @@ public sealed class TimingWheel
         }
 
         long now = _timeProvider.GetTimestamp();
+        if (_lastSweepTimestamp != 0 && _timeProvider.GetElapsedTime(_lastSweepTimestamp, now) < TimeSpan.FromMilliseconds(50))
+        {
+            return 0;
+        }
+
         int count = CollectExpiredIds(now, expiredBuffer);
         for (int i = 0; i < count; i++)
         {
             _entries.Remove(expiredBuffer[i]);
+        }
+
+        if (count < expiredBuffer.Length)
+        {
+            _lastSweepTimestamp = now;
         }
 
         return count;

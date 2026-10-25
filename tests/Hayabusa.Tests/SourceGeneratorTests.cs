@@ -17,6 +17,8 @@ namespace Hayabusa.Tests;
 
 public sealed class SourceGeneratorTests
 {
+    private static readonly CSharpParseOptions s_parseOptions = new(LanguageVersion.Preview);
+    private static readonly MetadataReference[] s_metadataReferences = CreateMetadataReferences();
     [Fact]
     public void Generator_ValidHayabusaService_GeneratesCleanCompilationWithZeroDiagnostics()
     {
@@ -522,38 +524,40 @@ public sealed class SourceGeneratorTests
         return builder.ToImmutable();
     }
 
-    private static readonly MetadataReference[] s_references =
+    private static ImmutableArray<Diagnostic> RunGeneratorAndGetDiagnostics(
+        string source,
+        out Compilation outputCompilation)
+    {
+        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, options: s_parseOptions, path: "TestService.cs");
+        var compilation = CSharpCompilation.Create(
+            assemblyName: "GeneratorTestAssembly",
+            syntaxTrees: [syntaxTree],
+            references: s_metadataReferences,
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var generator = new HayabusaIncrementalGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            generators: [generator.AsSourceGenerator()],
+            parseOptions: s_parseOptions);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out outputCompilation, out ImmutableArray<Diagnostic> diagnostics);
+        return diagnostics;
+    }
+
+    private static MetadataReference[] CreateMetadataReferences() =>
     [
         MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(System.Buffers.IBufferWriter<>).Assembly.Location),
+        MetadataReference.CreateFromFile(typeof(System.Net.Http.HttpMethod).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(ValueTask).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(UniTask).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(ConnectionId).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(HayabusaServiceAttribute).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(RoomActor).Assembly.Location),
         MetadataReference.CreateFromFile(typeof(MemoryPackableAttribute).Assembly.Location),
-        MetadataReference.CreateFromFile(typeof(System.Net.Http.HttpClient).Assembly.Location),
         MetadataReference.CreateFromFile(Assembly.Load("System.Runtime").Location),
         MetadataReference.CreateFromFile(Assembly.Load("System.Memory").Location),
+        MetadataReference.CreateFromFile(Assembly.Load("netstandard").Location),
     ];
-
-    private static ImmutableArray<Diagnostic> RunGeneratorAndGetDiagnostics(
-        string source,
-        out Compilation outputCompilation)
-    {
-        var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
-        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "TestService.cs");
-
-        var compilation = CSharpCompilation.Create(
-            assemblyName: "GeneratorTestAssembly",
-            syntaxTrees: [syntaxTree],
-            references: s_references,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        var generator = new HayabusaIncrementalGenerator();
-        GeneratorDriver driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
-        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out outputCompilation, out ImmutableArray<Diagnostic> diagnostics);
-        return diagnostics;
-    }
 }
 
 [HayabusaService]

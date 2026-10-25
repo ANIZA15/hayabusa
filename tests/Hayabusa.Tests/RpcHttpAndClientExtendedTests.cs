@@ -22,7 +22,7 @@ namespace Hayabusa.Tests;
 
 public sealed class RpcHttpAndClientExtendedTests
 {
-    private static readonly int[] s_twoElementArray = [10, 20];
+    private static readonly int[] s_sampleIntPair = [10, 20];
 
     [Fact]
     public void RpcAndHttpAttributes_PropertiesAndValidation_StoreExpectedMetadata()
@@ -121,6 +121,7 @@ public sealed class RpcHttpAndClientExtendedTests
     }
 
     [Theory]
+    [InlineData("CONNECT /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("TRACE /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("PATCH /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("BAD /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
@@ -333,10 +334,11 @@ public sealed class RpcHttpAndClientExtendedTests
         Assert.False(MemoryPackPayloadGuard.ValidateCollectionHeader(minusTwo));
 
         // Valid 2-element int array
-        byte[] validArray = MemoryPackSerializer.Serialize(s_twoElementArray);
+        byte[] validArray = MemoryPackSerializer.Serialize(s_sampleIntPair);
         Assert.True(MemoryPackPayloadGuard.ValidateCollectionHeader(validArray, minElementByteSize: 4));
         Assert.True(MemoryPackPayloadGuard.TryDeserializeSafe(validArray, out int[]? parsed, isCollectionOrStringRoot: true));
-        Assert.Equal(s_twoElementArray, parsed!);
+        Assert.NotNull(parsed);
+        Assert.Equal(s_sampleIntPair, parsed);
 
         // Corrupted payload for a complex type that triggers MemoryPackSerializationException
         byte[] corruptedString = [0x01, 0x00, 0x00, 0x00];

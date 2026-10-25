@@ -180,7 +180,10 @@ public sealed class CoreWorker : IDisposable
         }
         finally
         {
-            SynchronizationContext.SetSynchronizationContext(previousContext);
+            if (!ReferenceEquals(previousContext, _syncContext))
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
         }
     }
 
@@ -190,9 +193,20 @@ public sealed class CoreWorker : IDisposable
     public void StepManualTick(TickNumber tick)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        SynchronizationContext? previousContext = SynchronizationContext.Current;
         EnsureThreadContextInstalled();
-        ExecuteSingleTick(tick);
-        FlushPhase4Submissions(allowWaitForDeadline: false);
+        try
+        {
+            ExecuteSingleTick(tick);
+            FlushPhase4Submissions(allowWaitForDeadline: false);
+        }
+        finally
+        {
+            if (!ReferenceEquals(previousContext, _syncContext))
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }
     }
 
     /// <summary>
@@ -218,6 +232,11 @@ public sealed class CoreWorker : IDisposable
         }
 
         _disposed = true;
+        if (ReferenceEquals(SynchronizationContext.Current, _syncContext))
+        {
+            SynchronizationContext.SetSynchronizationContext(null);
+        }
+
         _roomManager.Dispose();
         _responseWriter.Dispose();
         _receiveBuffers.Clear();
@@ -230,6 +249,10 @@ public sealed class CoreWorker : IDisposable
         if (_syncContext is null || !_syncContext.IsOnOwnerThread)
         {
             _syncContext = new SingleThreadSynchronizationContext(_coreIndex, currentThreadId);
+        }
+
+        if (!ReferenceEquals(SynchronizationContext.Current, _syncContext))
+        {
             SynchronizationContext.SetSynchronizationContext(_syncContext);
         }
     }
@@ -384,7 +407,7 @@ public sealed class CoreWorker : IDisposable
             return false;
         }
 
-        if (!_rateLimiter.TryAcquire(connectionId, tokenCost: 0.1))
+        if (!_rateLimiter.TryAcquire(connectionId, tokenCost: 0.0001))
         {
             EvictConnection(connectionId, enqueueTransportDisconnect: true);
             return false;
