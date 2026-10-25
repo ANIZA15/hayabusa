@@ -25,7 +25,13 @@
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
-  <!-- Include THIRD-PARTY-NOTICES.md in all NuGet packages and publish outputs -->
+  <!-- Include LICENSE and THIRD-PARTY-NOTICES.md in all NuGet packages and publish outputs -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)LICENSE')">
+    <None Include="$(MSBuildThisFileDirectory)LICENSE"
+          Pack="true"
+          PackagePath="\"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.md')">
     <None Include="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.md"
           Pack="true"

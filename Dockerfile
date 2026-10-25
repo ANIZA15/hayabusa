@@ -44,7 +44,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Include third-party MIT license notices (Cysharp OSS compliance)
+# Include project MIT license and third-party MIT license notices (Cysharp OSS compliance)
+COPY --from=build /src/LICENSE /app/LICENSE
 COPY --from=build /src/THIRD-PARTY-NOTICES.md /app/THIRD-PARTY-NOTICES.md
 COPY --from=build /app/publish ./
 
