@@ -54,13 +54,20 @@ public readonly record struct EquatableDiagnostic(
     (string Arg0, string Arg1, string Arg2) MessageArgs);
 
 /// <summary>
+/// Value-equatable representation of a single parameter in an `[Rpc]` method.
+/// </summary>
+public readonly record struct RpcParameterModel(
+    string Name,
+    string TypeFullName);
+
+/// <summary>
 /// Value-equatable representation of a single `[Rpc]` method inside a `[HayabusaService]`.
 /// </summary>
 public readonly record struct RpcMethodModel(
     string MethodName,
     int MethodId,
-    (string FullName, bool HasParameter) RequestType,
-    (string FullName, bool HasPayload, bool IsUniTask) ResponseType);
+    EquatableArray<RpcParameterModel> Parameters,
+    (string FullName, bool HasPayload, bool IsAsync) ResponseType);
 
 /// <summary>
 /// Value-equatable representation of a single `[Get]` or `[Post]` HTTP route inside a `[HayabusaService]`.

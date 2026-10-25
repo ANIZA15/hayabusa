@@ -71,6 +71,51 @@ public sealed class RpcDispatcher
             return true;
         };
 
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    /// <summary>
+    /// Registers a compact context-free binary MemoryPack RPC handler for <paramref name="methodId"/>.
+    /// </summary>
+    public void MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TRequest,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TRequest, TResponse> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        MinimalRpcInvokeDelegate invoker = (_, id, payload, writer) =>
+        {
+            TRequest? req = MemoryPackSerializer.Deserialize<TRequest>(payload);
+            TResponse res = handler(req!);
+            FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
+            return true;
+        };
+
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    /// <summary>
+    /// Registers a parameterless binary MemoryPack RPC handler for <paramref name="methodId"/>.
+    /// </summary>
+    public void MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TResponse> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        MinimalRpcInvokeDelegate invoker = (_, id, _, writer) =>
+        {
+            TResponse res = handler();
+            FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
+            return true;
+        };
+
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    private void RegisterMinimalRpcInvoker(int methodId, MinimalRpcInvokeDelegate invoker)
+    {
         if ((uint)methodId < FastJumpTableSize)
         {
             _fastRpcJumpTable[methodId] = invoker;

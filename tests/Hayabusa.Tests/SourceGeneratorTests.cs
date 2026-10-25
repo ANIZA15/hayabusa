@@ -207,6 +207,32 @@ public sealed class SourceGeneratorTests
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void Generator_WhenServiceUsesAutoMethodIdMultiParamsAndSyncReturn_GeneratesCleanCompilation()
+    {
+        const string source = """
+            using Hayabusa.Rpc;
+
+            namespace TestApp;
+
+            [HayabusaService]
+            public sealed partial class CompactInventoryService
+            {
+                [Rpc]
+                public (bool Success, int TotalCount) AddItem(ulong userId, int itemId, int count) =>
+                    (true, count + 10);
+
+                [Rpc]
+                public void ResetInventory(ulong userId) { }
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGeneratorAndGetDiagnostics(source, out Compilation outputCompilation);
+
+        Assert.Empty(diagnostics);
+        Assert.Contains(outputCompilation.SyntaxTrees, static t => t.FilePath.EndsWith("CompactInventoryService.HayabusaService.g.cs", StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<Diagnostic> RunGeneratorAndGetDiagnostics(
         string source,
         out Compilation outputCompilation)

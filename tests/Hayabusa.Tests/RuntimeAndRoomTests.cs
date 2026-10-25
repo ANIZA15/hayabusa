@@ -413,6 +413,24 @@ public sealed class RuntimeAndRoomTests
         Assert.Equal(0, transport.SlabPool.OutstandingRentals);
     }
 
+    [Fact]
+    public async Task BattleRoomServiceClient_CompactAutoMethodIdAndMultiParamRpc_RoundtripsViaGeneratedClient()
+    {
+        var dispatcher = new RpcDispatcher();
+        var room = new BattleRoomService();
+        dispatcher.RegisterService(room);
+        using BattleRoomServiceClient client = BattleRoomServiceClient.CreateInMemory(dispatcher);
+
+        WorldSnapshot snapshot = await client.TeleportAsync(12.5f, 3.0f, -8.25f);
+        bool found = room.TryGetPlayerPosition(new ConnectionId(1UL), out MoveCommand pos);
+
+        Assert.True(found);
+        Assert.Equal(1, snapshot.PlayerCount);
+        Assert.Equal(12.5f, pos.X);
+        Assert.Equal(-8.25f, pos.Z);
+        Assert.True(MethodId.FromRoute("BattleRoomService", "Teleport").IsValid);
+    }
+
     private static void AddHundredPlayers(RoomActor room)
     {
         for (ulong i = 1; i <= 100; i++)
