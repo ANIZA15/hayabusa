@@ -80,6 +80,26 @@ public static class FrameParser
     }
 
     /// <summary>
+    /// Serializes <paramref name="value"/> directly into <paramref name="writer"/> using length backpatching
+    /// (zero intermediate scratch copy and zero heap allocations).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteMemoryPackFrame<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TPayload>(
+        ref PooledBufferWriter writer,
+        MethodId methodId,
+        RpcFrameFlags flags,
+        in TPayload value)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        int headerOffset = writer.ReserveHeaderSpace(RpcHeader.Size);
+        int payloadStart = writer.WrittenCount;
+        MemoryPackSerializer.Serialize(in writer, in value);
+        int payloadLength = writer.WrittenCount - payloadStart;
+        var header = new RpcHeader(payloadLength, RpcHeader.CurrentVersion, flags, methodId);
+        header.WriteTo(writer.GetReservedSpan(headerOffset, RpcHeader.Size));
+    }
+
+    /// <summary>
     /// Serializes <paramref name="value"/> using <see cref="MemoryPackSerializer"/> with a 12-byte RPC frame header
     /// with zero heap allocations on warm threads.
     /// Supports <c>allows ref struct</c> (C# 13) for stack-only buffer writers.
@@ -92,6 +112,13 @@ public static class FrameParser
         in TPayload value)
         where TWriter : IBufferWriter<byte>, allows ref struct
     {
+        if (typeof(TWriter) == typeof(PooledBufferWriter))
+        {
+            ref PooledBufferWriter pooled = ref Unsafe.As<TWriter, PooledBufferWriter>(ref writer);
+            WriteMemoryPackFrame(ref pooled, methodId, flags, in value);
+            return;
+        }
+
         ScratchArrayBufferWriter scratch = GetThreadLocalScratch();
         MemoryPackSerializer.Serialize(in scratch, in value);
         WriteFrame(ref writer, methodId, flags, scratch.WrittenSpan);

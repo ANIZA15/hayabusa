@@ -196,6 +196,9 @@ public sealed class SourceGeneratorTests
 
                 [Rpc(MethodId = 2)]
                 public UniTask ClearAsync() => UniTask.CompletedTask;
+
+                [Get("/items/{id}")]
+                public void GetItemById(int id) { }
             }
             """;
 

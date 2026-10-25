@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Buffers.Text;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Hayabusa.Rpc.Http;
 
@@ -39,14 +40,15 @@ public static class HttpParser
         int maxHeaderCount = DefaultMaxHeaderCount)
     {
         request = default;
-        if (input.IndexOf((byte)0) >= 0)
-        {
-            return HttpParseError.MalformedHeader;
-        }
-
-        int headerEndIndex = input.IndexOf("\r\n\r\n"u8);
+        int searchLimit = Math.Min(input.Length, maxHeaderSize + 4);
+        int headerEndIndex = input.Slice(0, searchLimit).IndexOf("\r\n\r\n"u8);
         if (headerEndIndex < 0)
         {
+            if (input.Slice(0, searchLimit).IndexOf((byte)0) >= 0)
+            {
+                return HttpParseError.MalformedHeader;
+            }
+
             return input.Length > maxHeaderSize ? HttpParseError.HeaderTooLarge : HttpParseError.IncompleteData;
         }
 
@@ -54,6 +56,11 @@ public static class HttpParser
         if (headerBytesLength > maxHeaderSize)
         {
             return HttpParseError.HeaderTooLarge;
+        }
+
+        if (input.Slice(0, headerBytesLength).IndexOf((byte)0) >= 0)
+        {
+            return HttpParseError.MalformedHeader;
         }
 
         return ParseSubmittedHeaderBlock(input, headerEndIndex, maxHeaderCount, out request);
@@ -130,12 +137,25 @@ public static class HttpParser
 
         path = afterMethod.Slice(0, secondSpace);
         ReadOnlySpan<byte> version = afterMethod.Slice(secondSpace + 1);
-        if (!version.SequenceEqual("HTTP/1.1"u8) && !version.SequenceEqual("HTTP/1.0"u8))
+        if (!IsSupportedHttpVersion(version))
         {
             return HttpParseError.InvalidRequestLine;
         }
 
         return ValidateSafePath(path);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsSupportedHttpVersion(scoped ReadOnlySpan<byte> version)
+    {
+        if (version.Length != 8)
+        {
+            return false;
+        }
+
+        ulong raw = BinaryPrimitives.ReadUInt64LittleEndian(version);
+        // "HTTP/1.1" = 0x312E312F50545448UL, "HTTP/1.0" = 0x302E312F50545448UL
+        return raw is 0x312E312F50545448UL or 0x302E312F50545448UL;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -277,13 +297,20 @@ public static class HttpParser
         ref SmugglingCheckState state,
         ref int contentLength)
     {
-        if (AsciiEqualsIgnoreCase(name, "Transfer-Encoding"u8))
+        // Fast-path length filter: "Content-Length" is 14 bytes, "Transfer-Encoding" is 17 bytes.
+        // Skips string comparison for Host, User-Agent, Accept, Connection, etc. in 1 CPU cycle.
+        if (name.Length != 14 && name.Length != 17)
         {
-            state.HasTransferEncoding = true;
-            return state.HasContentLength ? HttpParseError.RequestSmugglingDetected : HttpParseError.RequestSmugglingDetected;
+            return HttpParseError.None;
         }
 
-        if (!AsciiEqualsIgnoreCase(name, "Content-Length"u8))
+        if (name.Length == 17 && Ascii.EqualsIgnoreCase(name, "Transfer-Encoding"u8))
+        {
+            state.HasTransferEncoding = true;
+            return HttpParseError.RequestSmugglingDetected;
+        }
+
+        if (name.Length != 14 || !Ascii.EqualsIgnoreCase(name, "Content-Length"u8))
         {
             return HttpParseError.None;
         }
@@ -314,25 +341,6 @@ public static class HttpParser
 
         contentLength = parsed;
         return HttpParseError.None;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool AsciiEqualsIgnoreCase(scoped ReadOnlySpan<byte> left, scoped ReadOnlySpan<byte> right)
-    {
-        if (left.Length != right.Length)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < left.Length; i++)
-        {
-            if ((left[i] | 0x20) != (right[i] | 0x20))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private struct SmugglingCheckState
