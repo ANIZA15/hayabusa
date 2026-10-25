@@ -11,19 +11,30 @@ namespace Hayabusa.Core.Buffers;
 /// </summary>
 public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
 {
+    private readonly int _initialCapacity;
+    private readonly int _maxRetainedCapacity;
     private byte[] _buffer;
     private int _writtenCount;
     private bool _disposed;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="PooledBufferWriter"/> class with a pinned initial capacity.
+    /// Initializes a new instance of the <see cref="PooledBufferWriter"/> class with a pinned initial capacity
+    /// and a Kestrel-style high-water mark (<paramref name="maxRetainedCapacity"/>) to prevent permanent LOH bloat after burst writes.
     /// </summary>
     /// <param name="initialCapacity">Initial buffer capacity in bytes (default: 64 KB).</param>
-    public PooledBufferWriter(int initialCapacity = 64 * 1024)
+    /// <param name="maxRetainedCapacity">Maximum capacity retained across <see cref="Clear"/> calls (0 = 4x initialCapacity, min 256 KB).</param>
+    public PooledBufferWriter(int initialCapacity = 64 * 1024, int maxRetainedCapacity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(initialCapacity);
+        _initialCapacity = initialCapacity;
+        _maxRetainedCapacity = maxRetainedCapacity > 0
+            ? Math.Max(initialCapacity, maxRetainedCapacity)
+            : Math.Max(initialCapacity * 4, 256 * 1024);
         _buffer = GC.AllocateArray<byte>(initialCapacity, pinned: true);
     }
+
+    /// <summary>Gets the high-water mark capacity above which <see cref="Clear"/> releases the oversized buffer.</summary>
+    public int MaxRetainedCapacity => _maxRetainedCapacity;
 
     /// <summary>Gets the number of bytes written to the current buffer.</summary>
     public int WrittenCount
@@ -71,11 +82,24 @@ public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         return _buffer.AsSpan(offset, length);
     }
 
-    /// <summary>Resets the write cursor to zero without deallocating the backing buffer.</summary>
+    /// <summary>
+    /// Resets the write cursor to zero without deallocating the backing buffer, unless the buffer grew past
+    /// <see cref="MaxRetainedCapacity"/> (in which case it shrinks back to initial capacity to prevent LOH retention).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Clear()
     {
         _writtenCount = 0;
+        if (_buffer.Length > _maxRetainedCapacity)
+        {
+            ShrinkToInitialCapacity();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ShrinkToInitialCapacity()
+    {
+        _buffer = GC.AllocateArray<byte>(_initialCapacity, pinned: true);
     }
 
     /// <inheritdoc />

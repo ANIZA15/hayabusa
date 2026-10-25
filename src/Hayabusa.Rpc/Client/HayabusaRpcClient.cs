@@ -451,43 +451,53 @@ public sealed class HayabusaRpcClient : IDisposable
         out TResponse? response)
     {
         response = default;
-        FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
-        if (err == FrameParseError.IncompleteData)
+        while (_bufferedBytes > 0)
         {
-            return false;
-        }
+            FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+            if (err == FrameParseError.IncompleteData)
+            {
+                return false;
+            }
 
-        ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
-        {
-            _ = TryDispatchBroadcastSlice(in frame);
+            ValidateResponseFrame(err, frame.Header.Flags, methodId);
+            if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
+            {
+                _ = TryDispatchBroadcastSlice(in frame);
+                ConsumeBufferedBytes(frame.ConsumedBytes);
+                continue;
+            }
+
+            response = MemoryPackSerializer.Deserialize<TResponse>(frame.Payload);
             ConsumeBufferedBytes(frame.ConsumedBytes);
-            return false;
+            return true;
         }
 
-        response = MemoryPackSerializer.Deserialize<TResponse>(frame.Payload);
-        ConsumeBufferedBytes(frame.ConsumedBytes);
-        return true;
+        return false;
     }
 
     private bool TryConsumeNextVoidAckFrame(MethodId methodId)
     {
-        FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
-        if (err == FrameParseError.IncompleteData)
+        while (_bufferedBytes > 0)
         {
-            return false;
-        }
+            FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+            if (err == FrameParseError.IncompleteData)
+            {
+                return false;
+            }
 
-        ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
-        {
-            _ = TryDispatchBroadcastSlice(in frame);
+            ValidateResponseFrame(err, frame.Header.Flags, methodId);
+            if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
+            {
+                _ = TryDispatchBroadcastSlice(in frame);
+                ConsumeBufferedBytes(frame.ConsumedBytes);
+                continue;
+            }
+
             ConsumeBufferedBytes(frame.ConsumedBytes);
-            return false;
+            return true;
         }
 
-        ConsumeBufferedBytes(frame.ConsumedBytes);
-        return true;
+        return false;
     }
 
     private static void ValidateResponseFrame(FrameParseError error, RpcFrameFlags flags, MethodId methodId)
@@ -505,6 +515,11 @@ public sealed class HayabusaRpcClient : IDisposable
 
     private async ValueTask FillReceiveBufferAsync(CancellationToken cancellationToken)
     {
+        if (_bufferedBytes >= _receiveBuffer.Length)
+        {
+            throw new InvalidOperationException("RPC client receive buffer capacity exceeded.");
+        }
+
         int read = await _stream!.ReadAsync(_receiveBuffer.AsMemory(_bufferedBytes), cancellationToken);
         if (read <= 0)
         {

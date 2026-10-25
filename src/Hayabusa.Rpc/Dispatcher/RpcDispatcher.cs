@@ -9,6 +9,7 @@ using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Rpc.Framing;
 using Hayabusa.Rpc.Http;
+using Hayabusa.Rpc.Security;
 using MemoryPack;
 
 namespace Hayabusa.Rpc.Dispatcher;
@@ -65,7 +66,7 @@ public sealed class RpcDispatcher
         ArgumentNullException.ThrowIfNull(handler);
         MinimalRpcInvokeDelegate invoker = (ctx, id, payload, writer) =>
         {
-            TRequest? req = MemoryPackSerializer.Deserialize<TRequest>(payload);
+            TRequest? req = DeserializePayloadChecked<TRequest>(payload);
             TResponse res = handler(ctx, req!);
             FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
             return true;
@@ -86,13 +87,26 @@ public sealed class RpcDispatcher
         ArgumentNullException.ThrowIfNull(handler);
         MinimalRpcInvokeDelegate invoker = (_, id, payload, writer) =>
         {
-            TRequest? req = MemoryPackSerializer.Deserialize<TRequest>(payload);
+            TRequest? req = DeserializePayloadChecked<TRequest>(payload);
             TResponse res = handler(req!);
             FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
             return true;
         };
 
         RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static TRequest? DeserializePayloadChecked<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TRequest>(
+        scoped ReadOnlySpan<byte> payload)
+    {
+        if ((typeof(TRequest) == typeof(string) || typeof(TRequest).IsArray)
+            && !MemoryPackPayloadGuard.ValidateCollectionHeader(payload))
+        {
+            MemoryPackSerializationException.ThrowMessage("Rejected MemoryPack collection/string length bomb.");
+        }
+
+        return MemoryPackSerializer.Deserialize<TRequest>(payload);
     }
 
     /// <summary>
@@ -323,7 +337,16 @@ public sealed class RpcDispatcher
             return true;
         }
 
-        ExecuteHttpTunneledRpc(context, in frame, responseWriter);
+        try
+        {
+            ExecuteHttpTunneledRpc(context, in frame, responseWriter);
+        }
+        catch (MemoryPackSerializationException)
+        {
+            responseWriter.Clear();
+            HttpResponseWriter.WriteBadRequest(ref responseWriter);
+        }
+
         return true;
     }
 

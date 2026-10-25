@@ -23,12 +23,12 @@ public static class HttpParser
     /// <summary>Default maximum request body size in bytes (64 KB).</summary>
     public const int DefaultMaxBodySize = 64 * 1024;
 
-    // SIMD-vectorized SearchValues<byte> for RFC 9110 tchar validation and bare CR/LF detection
+    // SIMD-vectorized SearchValues<byte> for RFC 9110 tchar validation and control/bare-CRLF detection
     private static readonly SearchValues<byte> s_validHeaderNameBytes =
         SearchValues.Create("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"u8);
 
-    private static readonly SearchValues<byte> s_bareCrOrLfBytes =
-        SearchValues.Create("\r\n"u8);
+    private static readonly SearchValues<byte> s_forbiddenHeaderLineBytes =
+        SearchValues.Create("\0\x01\x02\x03\x04\x05\x06\x07\x08\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f"u8);
 
     /// <summary>
     /// Attempts to parse an HTTP/1.1 request from <paramref name="input"/> with zero heap allocations.
@@ -40,16 +40,12 @@ public static class HttpParser
         int maxHeaderCount = DefaultMaxHeaderCount)
     {
         request = default;
-        int searchLimit = Math.Min(input.Length, maxHeaderSize + 4);
+        int clampedMaxHeader = Math.Clamp(maxHeaderSize, 1, int.MaxValue - DefaultMaxBodySize - 8);
+        int searchLimit = Math.Min(input.Length, clampedMaxHeader + 4);
         int headerEndIndex = input.Slice(0, searchLimit).IndexOf("\r\n\r\n"u8);
         if (headerEndIndex < 0)
         {
-            if (input.Slice(0, searchLimit).IndexOf((byte)0) >= 0)
-            {
-                return HttpParseError.MalformedHeader;
-            }
-
-            return input.Length > maxHeaderSize ? HttpParseError.HeaderTooLarge : HttpParseError.IncompleteData;
+            return ResolveMissingHeaderTerminator(input, searchLimit, maxHeaderSize);
         }
 
         int headerBytesLength = headerEndIndex + 4;
@@ -64,6 +60,20 @@ public static class HttpParser
         }
 
         return ParseSubmittedHeaderBlock(input, headerEndIndex, maxHeaderCount, out request);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static HttpParseError ResolveMissingHeaderTerminator(
+        scoped ReadOnlySpan<byte> input,
+        int searchLimit,
+        int maxHeaderSize)
+    {
+        if (input.Slice(0, searchLimit).IndexOf((byte)0) >= 0)
+        {
+            return HttpParseError.MalformedHeader;
+        }
+
+        return input.Length > maxHeaderSize ? HttpParseError.HeaderTooLarge : HttpParseError.IncompleteData;
     }
 
     private static HttpParseError ParseSubmittedHeaderBlock(
@@ -190,17 +200,12 @@ public static class HttpParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static HttpParseError ValidateSafePath(scoped ReadOnlySpan<byte> path)
     {
-        if (path.IsEmpty || path[0] != (byte)'/')
+        if (!HasValidRequestTargetChars(path))
         {
             return HttpParseError.InvalidRequestLine;
         }
 
-        if (path.IndexOf(".."u8) >= 0 || path.IndexOf((byte)'\\') >= 0)
-        {
-            return HttpParseError.PathTraversalDetected;
-        }
-
-        if (ContainsCaseInsensitivePercent2E(path))
+        if (ContainsPathTraversalSequence(path))
         {
             return HttpParseError.PathTraversalDetected;
         }
@@ -209,10 +214,26 @@ public static class HttpParser
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool ContainsCaseInsensitivePercent2E(scoped ReadOnlySpan<byte> path)
-    {
-        return path.IndexOf("%2e"u8) >= 0 || path.IndexOf("%2E"u8) >= 0;
-    }
+    private static bool HasValidRequestTargetChars(scoped ReadOnlySpan<byte> path) =>
+        !path.IsEmpty && path[0] == (byte)'/' && !path.ContainsAnyExceptInRange((byte)0x21, (byte)0x7E);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ContainsPathTraversalSequence(scoped ReadOnlySpan<byte> path) =>
+        path.IndexOf(".."u8) >= 0
+        || path.IndexOf((byte)'\\') >= 0
+        || ContainsEncodedTraversalOrNull(path);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ContainsEncodedTraversalOrNull(scoped ReadOnlySpan<byte> path) =>
+        path.IndexOf("%2e"u8) >= 0
+        || path.IndexOf("%2E"u8) >= 0
+        || ContainsEncodedBackslashOrNull(path);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ContainsEncodedBackslashOrNull(scoped ReadOnlySpan<byte> path) =>
+        path.IndexOf("%5c"u8) >= 0
+        || path.IndexOf("%5C"u8) >= 0
+        || path.IndexOf("%00"u8) >= 0;
 
     private static HttpParseError ParseHeaders(
         scoped ReadOnlySpan<byte> headersSpan,
@@ -291,7 +312,7 @@ public static class HttpParser
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ContainsBareCrOrLf(scoped ReadOnlySpan<byte> line) =>
-        line.ContainsAny(s_bareCrOrLfBytes);
+        line.ContainsAny(s_forbiddenHeaderLineBytes);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsValidHeaderName(scoped ReadOnlySpan<byte> name) =>
@@ -341,15 +362,16 @@ public static class HttpParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static HttpParseError TryParseContentLengthValue(scoped ReadOnlySpan<byte> value, out int contentLength)
     {
-        if (!Utf8Parser.TryParse(value, out int parsed, out int consumed) || consumed != value.Length)
+        contentLength = 0;
+        if (value.IsEmpty || value.ContainsAnyExceptInRange((byte)'0', (byte)'9'))
         {
-            contentLength = 0;
             return HttpParseError.MalformedHeader;
         }
 
-        if ((uint)parsed > DefaultMaxBodySize)
+        if (!Utf8Parser.TryParse(value, out int parsed, out int consumed)
+            || consumed != value.Length
+            || (uint)parsed > DefaultMaxBodySize)
         {
-            contentLength = 0;
             return HttpParseError.PayloadTooLarge;
         }
 
