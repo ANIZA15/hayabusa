@@ -2,6 +2,7 @@ using System;
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Generator;
 using Hayabusa.Generator.Models;
@@ -173,6 +174,36 @@ public sealed class SourceGeneratorTests
         Assert.Equal(a.GetHashCode(), b.GetHashCode());
     }
 
+    [Fact]
+    public void Generator_WhenServiceUsesUniTaskAndArrayOrTuplePayloads_GeneratesCleanCompilation()
+    {
+        const string source = """
+            using Cysharp.Threading.Tasks;
+            using Hayabusa.Rpc;
+            using MemoryPack;
+
+            namespace TestApp;
+
+            [MemoryPackable]
+            public readonly partial record struct ItemDto(int Id);
+
+            [HayabusaService]
+            public sealed partial class UniTaskInventoryService
+            {
+                [Rpc(MethodId = 1)]
+                public UniTask<ItemDto[]> GetItemsAsync((int Page, int Size) query) =>
+                    UniTask.FromResult(new[] { new ItemDto(query.Page) });
+
+                [Rpc(MethodId = 2)]
+                public UniTask ClearAsync() => UniTask.CompletedTask;
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGeneratorAndGetDiagnostics(source, out _);
+
+        Assert.Empty(diagnostics);
+    }
+
     private static ImmutableArray<Diagnostic> RunGeneratorAndGetDiagnostics(
         string source,
         out Compilation outputCompilation)
@@ -182,6 +213,7 @@ public sealed class SourceGeneratorTests
         [
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(ValueTask).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(UniTask).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(ConnectionId).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(HayabusaServiceAttribute).Assembly.Location),
             MetadataReference.CreateFromFile(typeof(RoomActor).Assembly.Location),

@@ -61,6 +61,7 @@ public static class FrameParser
 
     /// <summary>
     /// Writes a complete RPC frame (12-byte header + raw payload bytes) directly into <paramref name="writer"/>.
+    /// Supports <c>allows ref struct</c> (C# 13) so stack-allocated <c>ref struct</c> buffer writers can be used with zero boxing.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteFrame<TWriter>(
@@ -68,7 +69,7 @@ public static class FrameParser
         MethodId methodId,
         RpcFrameFlags flags,
         scoped ReadOnlySpan<byte> payload)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         int totalLength = RpcHeader.Size + payload.Length;
         Span<byte> span = writer.GetSpan(totalLength);
@@ -81,6 +82,7 @@ public static class FrameParser
     /// <summary>
     /// Serializes <paramref name="value"/> using <see cref="MemoryPackSerializer"/> with a 12-byte RPC frame header
     /// with zero heap allocations on warm threads.
+    /// Supports <c>allows ref struct</c> (C# 13) for stack-only buffer writers.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteMemoryPackFrame<TWriter, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TPayload>(
@@ -88,7 +90,7 @@ public static class FrameParser
         MethodId methodId,
         RpcFrameFlags flags,
         in TPayload value)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         ScratchArrayBufferWriter scratch = GetThreadLocalScratch();
         MemoryPackSerializer.Serialize(in scratch, in value);

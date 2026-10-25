@@ -22,5 +22,6 @@
 
   <ItemGroup>
     <PackageReference Include="MemoryPack" />
+    <PackageReference Include="UniTask" />
   </ItemGroup>
 </Project>

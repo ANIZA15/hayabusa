@@ -143,9 +143,9 @@ hayabusa/
 ├── Dockerfile                       # 本番・スタンドアロン起動用マルチステージ Dockerfile (JIT / NativeAOT 両対応)
 ├── docker-compose.yml               # ワンコマンドで Hayabusa サーバーを立ち上げる Compose 設定
 ├── .env.example                     # サーバー起動パラメータ（ポート・TickRate・Transport）の設定サンプル
-├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定・ライセンス同梱設定
+├── Directory.Build.props            # 全プロジェクト共通の厳格ビルド設定 (.NET 9 / .NET 10 / .NET 11+ マルチターゲット)・ライセンス同梱設定
 ├── .editorconfig                    # コードスタイル & 複雑度 (CA1502) / 型厳格 (CS8509) 強制設定
-├── global.json                      # .NET 9 SDK バージョン固定
+├── global.json                      # .NET 9 / .NET 10 / .NET 11+ SDK ロールフォワード設定 (latestMajor)
 ├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文
 ├── src/
 │   ├── Hayabusa.Core/               # 強い型プリミティブ、軽量Context、Pinned Slab/RingBuffer、Completion I/O 抽象
@@ -188,18 +188,30 @@ NativeAOT シングルバイナリとしてビルドしたい場合は `PUBLISH_
 docker compose build --build-arg PUBLISH_AOT=true
 ```
 
-### 2. 環境変数によるゼロコンフィグ設定（コンテナ・本番運用向け）
+### 2. 環境変数・起動オプションによるゼロコンフィグ設定 & ロール分離（Web単体 / ゲーム単体 / 両方）
 
-コードを書き換えることなく、環境変数（または `.env`）でサーバーの挙動を制御できます。
+コードを書き換えることなく、環境変数（または CLI 引数 `--role` / `--web-only` / `--game-only` / `--web-and-game`）によって、**「Web サーバー単体」「ゲームサーバー単体」「Web + ゲームハイブリッド（両方受け入れ）」** の3つの形態を切り替えて起動できます。また、`IGameLoopTickHandler` により MagicOnion 風サービスだけでなく独自 ECS や物理エンジン等のカスタムゲームループもそのまま組み込めます。
 
-| 環境変数 | デフォルト値 | 説明 |
-| --- | --- | --- |
-| `HAYABUSA_BIND_ADDRESS` | `0.0.0.0` | バインドする IP アドレス |
-| `HAYABUSA_HTTP_PORT` | `5000` | HTTP / Minimal API 待ち受けポート |
-| `HAYABUSA_RPC_PORT` | `5001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
-| `HAYABUSA_WORKER_THREADS` | `0` | Thread-per-Core スレッド数（`0` でコンテナの CPU コア数を自動検出） |
-| `HAYABUSA_TICK_RATE` | `60` | Room (Actor) の定周期 Tick レート（Hz: `60` = 60fps、`30` = 30fps） |
-| `HAYABUSA_TRANSPORT` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket` |
+```csharp
+// 1. Web サーバー単体として起動 (Game Tick スケジューラを停止し、HTTP 処理に 100% 専念)
+var webApp = HayabusaApp.CreateBuilder(args).UseWebServerOnly(httpPort: 5000).Build();
+
+// 2. ゲームサーバー単体として起動 (HTTP パーサを無効化し、MemoryPack RPC & 60fps Tick に専念)
+var gameApp = HayabusaApp.CreateBuilder(args).UseGameServerOnly(tickRateHz: 60, rpcPort: 5001).Build();
+
+// 3. Web + ゲームサーバー両方として起動 (デフォルト: HTTP と Game RPC/Tick の両方を単一ランタイムで処理)
+var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 5000, rpcPort: 5001, tickRateHz: 60).Build();
+```
+
+| 環境変数 | CLI 引数 | デフォルト値 | 説明 |
+| --- | --- | --- | --- |
+| `HAYABUSA_ROLE` | `--role` (`--web-only` / `--game-only` / `--web-and-game`) | `both` (`WebAndGame`) | `web`（Web サーバー単体）、`game`（ゲームサーバー単体）、`both`（Web・ゲーム両方受け入れ） |
+| `HAYABUSA_BIND_ADDRESS` | `--bind` | `0.0.0.0` | バインドする IP アドレス |
+| `HAYABUSA_HTTP_PORT` | `--http-port` | `5000` | HTTP / Minimal API 待ち受けポート |
+| `HAYABUSA_RPC_PORT` | `--rpc-port` | `5001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
+| `HAYABUSA_WORKER_THREADS` | `--workers` | `0` | Thread-per-Core スレッド数（`0` でコンテナの CPU コア数を自動検出） |
+| `HAYABUSA_TICK_RATE` | `--tick-rate` | `60` | Room (Actor) の定周期 Tick レート（Hz: `60` = 60fps、`30` = 30fps） |
+| `HAYABUSA_TRANSPORT` | `--transport` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket` |
 
 ### 3. 自分のプロジェクトで Hayabusa サーバーを作る（NuGet / `dotnet new` テンプレート）
 

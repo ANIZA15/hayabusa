@@ -18,13 +18,16 @@ namespace Hayabusa.Runtime.Rooms;
 /// Base class for affinity-pinned, lock-free real-time game rooms (Actors).
 /// Every <see cref="RoomActor"/> is bound to a single <see cref="CoreIndex"/> thread; its state and <see cref="OnTick"/>
 /// are only ever accessed from that dedicated core thread, eliminating all locks.
-/// Uses Cysharp <c>R3</c> <see cref="DisposableBag"/> for zero-leak reactive subscription lifecycle management.
+/// Uses Cysharp <c>R3</c> <see cref="DisposableBag"/> and <see cref="Subject{T}"/> for zero-leak reactive lifecycle management.
 /// </summary>
 public abstract class RoomActor : IHayabusaRpcService, IDisposable
 {
     private readonly HashSet<ConnectionId> _joinedPlayers = new();
     private readonly List<ConnectionId> _playerList = new();
     private readonly PooledBufferWriter _broadcastBuffer = new(64 * 1024);
+    private readonly Subject<ConnectionId> _playerJoined = new();
+    private readonly Subject<ConnectionId> _playerLeft = new();
+    private readonly Subject<TickNumber> _ticked = new();
     private DisposableBag _subscriptions;
     private bool _disposed;
 
@@ -54,6 +57,21 @@ public abstract class RoomActor : IHayabusaRpcService, IDisposable
     public IReadOnlyList<ConnectionId> Players => _playerList;
 
     /// <summary>
+    /// Gets an R3 <see cref="Observable{T}"/> stream that emits whenever a new player joins this room.
+    /// </summary>
+    public Observable<ConnectionId> OnPlayerJoined => _playerJoined;
+
+    /// <summary>
+    /// Gets an R3 <see cref="Observable{T}"/> stream that emits whenever a player leaves or disconnects from this room.
+    /// </summary>
+    public Observable<ConnectionId> OnPlayerLeft => _playerLeft;
+
+    /// <summary>
+    /// Gets an R3 <see cref="Observable{T}"/> stream that emits the current <see cref="TickNumber"/> on every room tick.
+    /// </summary>
+    public Observable<TickNumber> OnTickObservable => _ticked;
+
+    /// <summary>
     /// Adds an <see cref="IDisposable"/> (such as an R3 observable subscription) to this room's <see cref="DisposableBag"/>
     /// so it is automatically disposed when the room is destroyed.
     /// </summary>
@@ -76,6 +94,7 @@ public abstract class RoomActor : IHayabusaRpcService, IDisposable
         }
 
         _playerList.Add(connectionId);
+        _playerJoined.OnNext(connectionId);
         return true;
     }
 
@@ -90,6 +109,7 @@ public abstract class RoomActor : IHayabusaRpcService, IDisposable
         }
 
         _playerList.Remove(connectionId);
+        _playerLeft.OnNext(connectionId);
         return true;
     }
 
@@ -144,6 +164,7 @@ public abstract class RoomActor : IHayabusaRpcService, IDisposable
     {
         CurrentTick = tick;
         OnTick(tick);
+        _ticked.OnNext(tick);
     }
 
     /// <inheritdoc />
@@ -184,6 +205,9 @@ public abstract class RoomActor : IHayabusaRpcService, IDisposable
         if (disposing)
         {
             _subscriptions.Dispose();
+            _playerJoined.Dispose();
+            _playerLeft.Dispose();
+            _ticked.Dispose();
             _joinedPlayers.Clear();
             _playerList.Clear();
             _broadcastBuffer.Dispose();

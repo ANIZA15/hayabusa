@@ -1,6 +1,9 @@
 using System;
+using System.Text;
+using Cysharp.Text;
 using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
+using Hayabusa.Core.Transport;
 using Hayabusa.Rpc.Framing;
 using Xunit;
 
@@ -77,6 +80,42 @@ public sealed class PrimitivesAndMemoryTests
 
         Assert.Equal(0, pool.OutstandingRentals);
         Assert.Equal(16, pool.AvailableBlocks);
+    }
+
+    [Fact]
+    public void StronglyTypedPrimitives_ZStringUtf8AndSpanFormatting_ProducesExactOutputWithZeroHeapStringAllocations()
+    {
+        var connId = new ConnectionId(42UL);
+        var roomId = new RoomId(99UL);
+        var methodId = new MethodId(7);
+        var coreIndex = new CoreIndex(3);
+        var tick = new TickNumber(120UL);
+
+        using Utf8ValueStringBuilder sb = ZString.CreateUtf8StringBuilder();
+        sb.Append(connId);
+        sb.Append('|');
+        sb.Append(roomId);
+        sb.Append('|');
+        sb.Append(methodId);
+        sb.Append('|');
+        sb.Append(coreIndex);
+        sb.Append('|');
+        sb.Append(tick);
+
+        Assert.Equal("conn:42|room:99|method:7|core:3|tick:120", Encoding.UTF8.GetString(sb.AsSpan()));
+    }
+
+    [Fact]
+    public void TransportSubmissionQueue_TryEnqueueBatchParamsSpan_CopiesEntriesWithoutAllocation()
+    {
+        var queue = new TransportSubmissionQueue(16);
+        var e1 = new TransportSubmissionEntry(TransportOperationKind.Send, new ConnectionId(1UL), ReadOnlyMemory<byte>.Empty);
+        var e2 = new TransportSubmissionEntry(TransportOperationKind.Disconnect, new ConnectionId(2UL), ReadOnlyMemory<byte>.Empty);
+
+        int enqueued = queue.TryEnqueueBatch(e1, e2);
+
+        Assert.Equal(2, enqueued);
+        Assert.Equal(2, queue.Count);
     }
 
     private static void PerformRentReturnCycles(PinnedSlabPool pool, int iterations)

@@ -9,6 +9,7 @@ namespace Hayabusa.Rpc.Http;
 /// <summary>
 /// Writes HTTP/1.1 responses directly into an <see cref="IBufferWriter{T}"/> with zero heap allocations
 /// using UTF-8 byte literals and Cysharp <c>ZString</c>.
+/// Supports C# 13 <c>allows ref struct</c> so stack-only buffer writers can be passed by reference.
 /// </summary>
 public static class HttpResponseWriter
 {
@@ -26,7 +27,7 @@ public static class HttpResponseWriter
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteOkUtf8<TWriter>(ref TWriter writer, scoped ReadOnlySpan<byte> utf8Body)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         Span<byte> dest = writer.GetSpan(Status200HeaderPrefix.Length + 16 + utf8Body.Length);
         Status200HeaderPrefix.CopyTo(dest);
@@ -45,13 +46,25 @@ public static class HttpResponseWriter
     }
 
     /// <summary>
-    /// Writes a formatted 200 OK HTTP/1.1 response using Cysharp <c>ZString</c> UTF-8 builder.
+    /// Writes a formatted 200 OK HTTP/1.1 response directly into <paramref name="writer"/> using Cysharp <c>ZString</c> UTF-8 builder.
     /// </summary>
     public static void WriteFormattedOk<TWriter, TArg>(ref TWriter writer, string format, TArg arg)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         using Utf8ValueStringBuilder sb = ZString.CreateUtf8StringBuilder();
         sb.AppendFormat(format, arg);
+        WriteOkUtf8(ref writer, sb.AsSpan());
+    }
+
+    /// <summary>
+    /// Writes a concatenated 200 OK HTTP/1.1 response using Cysharp <c>ZString</c> UTF-8 builder with zero string allocations.
+    /// </summary>
+    public static void WriteConcatOk<TWriter, T1, T2>(ref TWriter writer, T1 arg1, T2 arg2)
+        where TWriter : IBufferWriter<byte>, allows ref struct
+    {
+        using Utf8ValueStringBuilder sb = ZString.CreateUtf8StringBuilder();
+        sb.Append(arg1);
+        sb.Append(arg2);
         WriteOkUtf8(ref writer, sb.AsSpan());
     }
 
@@ -60,7 +73,7 @@ public static class HttpResponseWriter
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteBadRequest<TWriter>(ref TWriter writer)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         Span<byte> dest = writer.GetSpan(Status400Response.Length);
         Status400Response.CopyTo(dest);
@@ -72,7 +85,7 @@ public static class HttpResponseWriter
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteNotFound<TWriter>(ref TWriter writer)
-        where TWriter : IBufferWriter<byte>
+        where TWriter : IBufferWriter<byte>, allows ref struct
     {
         Span<byte> dest = writer.GetSpan(Status404Response.Length);
         Status404Response.CopyTo(dest);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Core.Transport;
@@ -10,13 +11,29 @@ using Hayabusa.Rpc;
 using Hayabusa.Rpc.Dispatcher;
 using Hayabusa.Rpc.Framing;
 using Hayabusa.Rpc.Http;
+using Hayabusa.Runtime.Hosting;
 using Hayabusa.Runtime.Rooms;
 using Hayabusa.Runtime.Security;
 using Hayabusa.Runtime.Threading;
 using Hayabusa.Runtime.Timing;
 using MemoryPack;
+using Microsoft.Extensions.Logging;
+using ZLogger;
 
 namespace Hayabusa.Runtime.Engine;
+
+/// <summary>
+/// Framework-agnostic game loop tick handler that can be registered on a <see cref="CoreWorker"/>
+/// alongside or instead of <see cref="RoomActor"/> instances (supporting custom ECS worlds, physics engines,
+/// MagicOnion-style hubs, or custom game loops).
+/// </summary>
+public interface IGameLoopTickHandler
+{
+    /// <summary>
+    /// Invoked deterministically at the worker's configured tick rate on the pinned <paramref name="coreIndex"/> thread.
+    /// </summary>
+    void OnGameTick(CoreIndex coreIndex, TickNumber tick);
+}
 
 /// <summary>
 /// Configuration parameters for a single <see cref="CoreWorker"/> instance.
@@ -26,11 +43,15 @@ namespace Hayabusa.Runtime.Engine;
 /// <param name="TickRateHz">Target room tick frequency in Hz.</param>
 /// <param name="MaxFrameSize">Maximum allowed RPC frame payload size in bytes.</param>
 /// <param name="TimeProvider">Time provider for deterministic scheduling and timeout sweeps.</param>
+/// <param name="Logger">Optional ZLogger-compatible structured logger for worker diagnostics.</param>
+/// <param name="Role">Operational role of the worker (<c>WebAndGame</c>, <c>WebOnly</c>, or <c>GameOnly</c>).</param>
 public readonly record struct CoreWorkerConfig(
     CoreIndex CoreIndex,
     int TickRateHz = 60,
     int MaxFrameSize = RpcHeader.DefaultMaxFrameSize,
-    TimeProvider? TimeProvider = null);
+    TimeProvider? TimeProvider = null,
+    ILogger? Logger = null,
+    HayabusaServerRole Role = HayabusaServerRole.WebAndGame);
 
 /// <summary>
 /// Implements the Thread-per-Core 4-phase event loop combining completion-based I/O,
@@ -49,11 +70,14 @@ public sealed class CoreWorker : IDisposable
     private readonly HayabusaContext _context;
     private readonly RoomManager _roomManager;
     private readonly MpscMailbox<CrossCoreRpcMessage> _mailbox;
+    private readonly List<IGameLoopTickHandler> _tickHandlers = new(4);
     private readonly Dictionary<ConnectionId, ContiguousReceiveBuffer> _receiveBuffers = new(128);
     private readonly TransportCompletionEvent[] _cqeScratch = new TransportCompletionEvent[256];
     private readonly ConnectionId[] _expiredScratch = new ConnectionId[64];
     private readonly TickNumber[] _dueTicksScratch = new TickNumber[8];
     private readonly int _maxFrameSize;
+    private readonly HayabusaServerRole _role;
+    private readonly ILogger? _logger;
     private SingleThreadSynchronizationContext? _syncContext;
     private int _lastObservedThreadId;
     private bool _disposed;
@@ -73,6 +97,8 @@ public sealed class CoreWorker : IDisposable
         _transport = transport;
         _dispatcher = dispatcher;
         _maxFrameSize = config.MaxFrameSize > 0 ? config.MaxFrameSize : RpcHeader.DefaultMaxFrameSize;
+        _role = config.Role;
+        _logger = config.Logger;
 
         TimeProvider timeProvider = config.TimeProvider ?? TimeProvider.System;
         _tickScheduler = new LogicTickScheduler(config.TickRateHz > 0 ? config.TickRateHz : 60, timeProvider);
@@ -88,8 +114,28 @@ public sealed class CoreWorker : IDisposable
     /// <summary>Gets the core index of this worker.</summary>
     public CoreIndex CoreIndex => _coreIndex;
 
+    /// <summary>Gets the operational role (<c>WebAndGame</c>, <c>WebOnly</c>, or <c>GameOnly</c>) of this worker.</summary>
+    public HayabusaServerRole Role => _role;
+
+    /// <summary>Gets a value indicating whether HTTP / Web request processing is enabled on this worker.</summary>
+    public bool IsWebEnabled => _role is HayabusaServerRole.WebAndGame or HayabusaServerRole.WebOnly;
+
+    /// <summary>Gets a value indicating whether Game Room ticks and binary RPC are enabled on this worker.</summary>
+    public bool IsGameEnabled => _role is HayabusaServerRole.WebAndGame or HayabusaServerRole.GameOnly;
+
     /// <summary>Gets the room manager pinned to this worker core.</summary>
     public RoomManager RoomManager => _roomManager;
+
+    /// <summary>
+    /// Registers a custom <see cref="IGameLoopTickHandler"/> (such as a custom ECS world, physics simulation, or non-RoomActor game loop)
+    /// to be ticked deterministically during Phase 2 on this core.
+    /// </summary>
+    public void RegisterTickHandler(IGameLoopTickHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _tickHandlers.Add(handler);
+    }
 
     /// <summary>Gets the tick scheduler of this worker core.</summary>
     public LogicTickScheduler TickScheduler => _tickScheduler;
@@ -138,7 +184,7 @@ public sealed class CoreWorker : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         EnsureThreadContextInstalled();
-        _roomManager.TickAllRooms(tick);
+        ExecuteSingleTick(tick);
         FlushPhase4Submissions(allowWaitForDeadline: false);
     }
 
@@ -270,12 +316,24 @@ public sealed class CoreWorker : IDisposable
             ReadOnlySpan<byte> readable = buffer.ReadableSpan;
             if (LooksLikeHttpRequest(readable))
             {
+                if (!IsWebEnabled)
+                {
+                    EvictConnection(connectionId, enqueueTransportDisconnect: true);
+                    return;
+                }
+
                 if (!TryProcessHttpBuffer(connectionId, buffer))
                 {
                     return;
                 }
 
                 continue;
+            }
+
+            if (!IsGameEnabled)
+            {
+                SendBadRequestAndDisconnect(connectionId);
+                return;
             }
 
             if (!TryProcessRpcBuffer(connectionId, buffer))
@@ -328,10 +386,7 @@ public sealed class CoreWorker : IDisposable
     {
         _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick);
         _dispatcher.DispatchHttp(_context, in req, _responseWriter);
-        if (_responseWriter.WrittenCount > 0)
-        {
-            _submissionQueue.TryEnqueueSend(connectionId, _responseWriter.WrittenMemory.ToArray());
-        }
+        EnqueueBufferedResponseIfAny(connectionId);
     }
 
     private void SendBadRequestAndDisconnect(ConnectionId connectionId)
@@ -339,7 +394,7 @@ public sealed class CoreWorker : IDisposable
         _responseWriter.Clear();
         PooledBufferWriter writer = _responseWriter;
         HttpResponseWriter.WriteBadRequest(ref writer);
-        _submissionQueue.TryEnqueueSend(connectionId, writer.WrittenMemory.ToArray());
+        EnqueueBufferedResponseIfAny(connectionId);
         EvictConnection(connectionId, enqueueTransportDisconnect: true);
     }
 
@@ -359,7 +414,8 @@ public sealed class CoreWorker : IDisposable
         }
 
         int consumed = frame.ConsumedBytes;
-        ExecuteParsedRpcFrame(connectionId, frame.Header.MethodId, buffer.ReadableSpan.Slice(RpcHeader.Size, frame.Header.PayloadLength).ToArray());
+        ReadOnlyMemory<byte> payloadSlice = buffer.ReadableMemory.Slice(RpcHeader.Size, frame.Header.PayloadLength);
+        ExecuteParsedRpcFrame(connectionId, frame.Header.MethodId, payloadSlice);
         buffer.Consume(consumed);
         _rateLimiter.ReleaseInFlight(connectionId);
         _timingWheel.TouchCompleteFrame(connectionId);
@@ -372,22 +428,23 @@ public sealed class CoreWorker : IDisposable
         {
             _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick);
             ValueTask<bool> dispatchTask = _dispatcher.DispatchAsync(_context, methodId, payload, _responseWriter);
-            if (dispatchTask.IsCompleted)
+            if (dispatchTask.IsCompletedSuccessfully)
             {
                 _ = dispatchTask.GetAwaiter().GetResult();
                 EnqueueBufferedResponseIfAny(connectionId);
                 return;
             }
 
-            AwaitRpcContinuation(connectionId, dispatchTask);
+            AwaitRpcContinuation(connectionId, dispatchTask.AsUniTask()).Forget();
         }
         catch (MemoryPackSerializationException)
         {
+            _logger?.ZLogWarning($"MemoryPack deserialization failed on {_coreIndex} for {connectionId} ({methodId})");
             EvictConnection(connectionId, enqueueTransportDisconnect: true);
         }
     }
 
-    private async void AwaitRpcContinuation(ConnectionId connectionId, ValueTask<bool> dispatchTask)
+    private async UniTaskVoid AwaitRpcContinuation(ConnectionId connectionId, UniTask<bool> dispatchTask)
     {
         try
         {
@@ -396,16 +453,39 @@ public sealed class CoreWorker : IDisposable
         }
         catch (MemoryPackSerializationException)
         {
+            _logger?.ZLogWarning($"Async MemoryPack deserialization failed on {_coreIndex} for {connectionId}");
             EvictConnection(connectionId, enqueueTransportDisconnect: true);
         }
     }
 
     private void EnqueueBufferedResponseIfAny(ConnectionId connectionId)
     {
-        if (_responseWriter.WrittenCount > 0)
+        ReadOnlySpan<byte> written = _responseWriter.WrittenSpan;
+        if (written.IsEmpty)
         {
-            _submissionQueue.TryEnqueueSend(connectionId, _responseWriter.WrittenMemory.ToArray());
+            return;
         }
+
+        if (_transport.SlabPool.TryRentSlot(out int slotIndex, out uint generation))
+        {
+            Span<byte> slotSpan = _transport.SlabPool.GetSlotSpan(slotIndex, generation);
+            if (written.Length <= slotSpan.Length)
+            {
+                written.CopyTo(slotSpan);
+                ReadOnlyMemory<byte> memory = _transport.SlabPool.GetSlotMemory(slotIndex, generation).Slice(0, written.Length);
+                var token = new SlabSlotToken(slotIndex, generation);
+                if (!_submissionQueue.TryEnqueueSend(connectionId, memory, token))
+                {
+                    _transport.SlabPool.ReturnSlot(slotIndex, generation);
+                }
+
+                return;
+            }
+
+            _transport.SlabPool.ReturnSlot(slotIndex, generation);
+        }
+
+        _submissionQueue.TryEnqueueSend(connectionId, _responseWriter.WrittenMemory.ToArray());
     }
 
     private void DrainCrossCoreMailbox()
@@ -446,10 +526,24 @@ public sealed class CoreWorker : IDisposable
 
     private void ExecutePhase2RoomTicks()
     {
+        if (!IsGameEnabled)
+        {
+            return;
+        }
+
         int dueCount = _tickScheduler.CollectDueTicks(_dueTicksScratch);
         for (int i = 0; i < dueCount; i++)
         {
-            _roomManager.TickAllRooms(_dueTicksScratch[i]);
+            ExecuteSingleTick(_dueTicksScratch[i]);
+        }
+    }
+
+    private void ExecuteSingleTick(TickNumber tick)
+    {
+        _roomManager.TickAllRooms(tick);
+        for (int i = 0; i < _tickHandlers.Count; i++)
+        {
+            _tickHandlers[i].OnGameTick(_coreIndex, tick);
         }
     }
 
@@ -464,12 +558,25 @@ public sealed class CoreWorker : IDisposable
 
     private void FlushPhase4Submissions(bool allowWaitForDeadline)
     {
-        TimeSpan waitDeadline = allowWaitForDeadline ? _tickScheduler.GetTimeUntilNextTick() : TimeSpan.Zero;
+        TimeSpan waitDeadline = ComputePhase4WaitDeadline(allowWaitForDeadline);
         if (_submissionQueue.Count > 0 || allowWaitForDeadline)
         {
             _transport.SubmitAndWait(_submissionQueue.PendingEntries, waitDeadline);
             _submissionQueue.Clear();
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private TimeSpan ComputePhase4WaitDeadline(bool allowWaitForDeadline)
+    {
+        if (!allowWaitForDeadline)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return IsGameEnabled
+            ? _tickScheduler.GetTimeUntilNextTick()
+            : TimeSpan.FromMilliseconds(15);
     }
 
     private void EvictConnection(ConnectionId connectionId, bool enqueueTransportDisconnect)

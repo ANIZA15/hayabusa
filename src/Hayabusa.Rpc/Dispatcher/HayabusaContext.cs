@@ -64,6 +64,16 @@ public sealed class HayabusaContext
         PooledBufferWriter writer = _responseWriter;
         HttpResponseWriter.WriteOkUtf8(ref writer, utf8Body);
     }
+
+    /// <summary>
+    /// Writes a formatted UTF-8 HTTP 200 OK body using Cysharp <c>ZString</c> with zero heap allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteZString<TArg>(string format, TArg arg)
+    {
+        PooledBufferWriter writer = _responseWriter;
+        HttpResponseWriter.WriteFormattedOk(ref writer, format, arg);
+    }
 }
 
 /// <summary>

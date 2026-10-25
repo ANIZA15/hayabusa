@@ -1,6 +1,11 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Default to net9.0 while dynamically including net10.0 and future .NET 11+ targets when installed -->
+    <HayabusaTargetFrameworks>net9.0</HayabusaTargetFrameworks>
+    <HayabusaTargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(MSBuildVersion)', '18.0'))">$(HayabusaTargetFrameworks);net10.0</HayabusaTargetFrameworks>
+    <HayabusaTargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(MSBuildVersion)', '19.0'))">$(HayabusaTargetFrameworks);net11.0</HayabusaTargetFrameworks>
+    <TargetFrameworks Condition="'$(TargetFramework)' == '' and '$(TargetFrameworks)' == ''">$(HayabusaTargetFrameworks)</TargetFrameworks>
+
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -10,6 +15,8 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <SuppressTfmSupportBuildWarnings>true</SuppressTfmSupportBuildWarnings>
 
     <!-- Package & OSS Metadata -->
     <Authors>Hayabusa Contributors</Authors>

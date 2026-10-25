@@ -158,16 +158,162 @@ public sealed class RuntimeAndRoomTests
     public void HayabusaServerOptions_CommandLineArguments_OverrideDefaults()
     {
         var options = new HayabusaServerOptions();
-        string[] args = ["--bind", "127.0.0.1", "--http-port", "8080", "--rpc-port", "8081", "--workers", "4", "--tick-rate", "30", "--transport", "inmemory"];
+        string[] args = ["--role", "web", "--bind", "127.0.0.1", "--http-port", "8080", "--rpc-port", "8081", "--workers", "4", "--tick-rate", "30", "--transport", "inmemory"];
 
         options.ApplyEnvironmentAndArgs(args);
 
+        Assert.Equal(HayabusaServerRole.WebOnly, options.Role);
+        Assert.True(options.IsWebEnabled);
+        Assert.False(options.IsGameEnabled);
         Assert.Equal("127.0.0.1", options.BindAddress);
         Assert.Equal(8080, options.HttpPort);
         Assert.Equal(8081, options.RpcPort);
         Assert.Equal(4, options.WorkerThreads);
         Assert.Equal(30, options.TickRate);
         Assert.Equal("inmemory", options.Transport);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenConfiguredAsWebOnly_ServesHttpRequestsAndSkipsGameTicksAndRejectsRpc()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        var config = new CoreWorkerConfig(CoreIndex.Zero, TickRateHz: 60, TimeProvider: fakeTime, Role: HayabusaServerRole.WebOnly);
+        using var worker = new CoreWorker(config, transport, dispatcher);
+        BattleRoomService room = worker.RoomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+
+        var httpConn = new ConnectionId(1UL);
+        var rpcConn = new ConnectionId(2UL);
+        transport.EnqueueAccept(httpConn);
+        transport.TryEnqueueReceive(httpConn, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8);
+
+        using var rpcFrame = new PooledBufferWriter(128);
+        PooledBufferWriter w = rpcFrame;
+        BattleRoomServiceClient.WriteMoveAsyncRequest(ref w, new MoveCommand(1f, 2f, 3f));
+        transport.EnqueueAccept(rpcConn);
+        transport.TryEnqueueReceive(rpcConn, rpcFrame.WrittenSpan);
+
+        fakeTime.Advance(TimeSpan.FromMilliseconds(50));
+        worker.StepIteration();
+
+        Assert.Single(transport.GetSentPayloads(httpConn));
+        Assert.True(transport.IsDisconnected(rpcConn));
+        Assert.Equal(TickNumber.Zero, room.CurrentTick);
+    }
+
+    [Fact]
+    public void CoreWorker_WhenConfiguredAsGameOnly_ExecutesRpcAndCustomGameLoopTicksAndRejectsHttp()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        var config = new CoreWorkerConfig(CoreIndex.Zero, TickRateHz: 50, TimeProvider: fakeTime, Role: HayabusaServerRole.GameOnly);
+        using var worker = new CoreWorker(config, transport, dispatcher);
+        var customLoop = new RecordingTickHandler();
+        worker.RegisterTickHandler(customLoop);
+
+        var httpConn = new ConnectionId(10UL);
+        transport.EnqueueAccept(httpConn);
+        transport.TryEnqueueReceive(httpConn, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8);
+
+        fakeTime.Advance(TimeSpan.FromMilliseconds(20));
+        worker.StepIteration();
+
+        Assert.True(transport.IsDisconnected(httpConn));
+        Assert.Empty(transport.GetSentPayloads(httpConn));
+        Assert.Equal(new TickNumber(1UL), customLoop.LastTick);
+    }
+
+    [Fact]
+    public void HayabusaAppBuilder_RoleBuilderMethods_ConfigureWebOnlyGameOnlyAndHybridModes()
+    {
+        using HayabusaApp webOnly = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseWebServerOnly(httpPort: 8080).Build();
+        using HayabusaApp gameOnly = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseGameServerOnly(tickRateHz: 30, rpcPort: 9000).Build();
+        using HayabusaApp hybrid = HayabusaApp.CreateBuilder(["--transport", "inmemory"]).UseWebAndGameServer(httpPort: 8080, rpcPort: 9000, tickRateHz: 60).Build();
+
+        Assert.Equal(HayabusaServerRole.WebOnly, webOnly.Role);
+        Assert.Equal(HayabusaServerRole.GameOnly, gameOnly.Role);
+        Assert.Equal(HayabusaServerRole.WebAndGame, hybrid.Role);
+    }
+
+    private sealed class RecordingTickHandler : IGameLoopTickHandler
+    {
+        public TickNumber LastTick { get; private set; }
+
+        public void OnGameTick(CoreIndex coreIndex, TickNumber tick)
+        {
+            LastTick = tick;
+        }
+    }
+
+    [Fact]
+    public void RoomActor_R3LifecycleObservables_EmitPlayerJoinedTickAndPlayerLeftEvents()
+    {
+        using var writer = new PooledBufferWriter(1024);
+        var context = new HayabusaContext(CoreIndex.Zero, writer);
+        var sq = new TransportSubmissionQueue(64);
+        using var roomManager = new RoomManager(CoreIndex.Zero, context, sq);
+        BattleRoomService room = roomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(88UL));
+
+        int joinedCount = 0;
+        int leftCount = 0;
+        ulong lastTickObserved = 0;
+        room.AddSubscription(room.OnPlayerJoined.Subscribe(_ => joinedCount++));
+        room.AddSubscription(room.OnPlayerLeft.Subscribe(_ => leftCount++));
+        room.AddSubscription(room.OnTickObservable.Subscribe(t => lastTickObserved = t.Value));
+
+        var player = new ConnectionId(500UL);
+        room.JoinPlayer(player);
+        room.ExecuteTick(new TickNumber(7UL));
+        room.LeavePlayer(player);
+
+        Assert.Equal(1, joinedCount);
+        Assert.Equal(1, leftCount);
+        Assert.Equal(7UL, lastTickObserved);
+    }
+
+    [Fact]
+    public async Task RoomActor_SourceGeneratedUniTaskRpc_ExecutesAndSerializesResponse()
+    {
+        using var writer = new PooledBufferWriter(1024);
+        var context = new HayabusaContext(CoreIndex.Zero, writer);
+        var sq = new TransportSubmissionQueue(64);
+        using var roomManager = new RoomManager(CoreIndex.Zero, context, sq);
+        BattleRoomService room = roomManager.CreateAndRegisterRoom<BattleRoomService>(new RoomId(1UL));
+        room.JoinPlayer(new ConnectionId(10UL));
+        room.ExecuteTick(new TickNumber(15UL));
+
+        context.Bind(new ConnectionId(10UL), new RoomId(1UL), new TickNumber(15UL));
+        bool handled = await room.TryDispatchRpcAsync(context, new MethodId(10), ReadOnlyMemory<byte>.Empty, writer);
+        FrameParseError parseErr = FrameParser.TryParse(writer.WrittenSpan, 1024, out FrameSlice frame);
+        WorldSnapshot snapshot = MemoryPack.MemoryPackSerializer.Deserialize<WorldSnapshot>(frame.Payload);
+
+        Assert.True(handled);
+        Assert.Equal(FrameParseError.None, parseErr);
+        Assert.Equal(new TickNumber(15UL), snapshot.Tick);
+        Assert.Equal(1, snapshot.PlayerCount);
+    }
+
+    [Fact]
+    public void CoreWorker_FullHttpRequestResponseCycle_AllocatesZeroBytesAndReturnsSlabSlot()
+    {
+        var fakeTime = new FakeTimeProvider();
+        using var transport = new InMemoryTransport();
+        var dispatcher = new RpcDispatcher();
+        dispatcher.MapHttp(Hayabusa.Rpc.Http.HttpMethodKind.Get, "/health", static ctx => ctx.WriteUtf8("OK"u8));
+        using var worker = new CoreWorker(new CoreWorkerConfig(CoreIndex.Zero, TimeProvider: fakeTime), transport, dispatcher);
+        var connId = new ConnectionId(202UL);
+        byte[] rawHttp = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"u8.ToArray();
+
+        transport.EnqueueAccept(connId);
+        transport.TryEnqueueReceive(connId, rawHttp);
+        worker.StepIteration();
+
+        Assert.Equal(0, transport.SlabPool.OutstandingRentals);
+        Assert.Single(transport.GetSentPayloads(connId));
     }
 
     private static void AddHundredPlayers(RoomActor room)

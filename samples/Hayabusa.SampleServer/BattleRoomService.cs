@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using Hayabusa.Core.Primitives;
 using Hayabusa.Rpc;
 using Hayabusa.Runtime.Rooms;
@@ -21,7 +22,7 @@ public readonly partial record struct WorldSnapshot(TickNumber Tick, int PlayerC
 
 /// <summary>
 /// Sample real-time battle room actor demonstrating both <c>[HayabusaService]</c> source-generated RPC dispatch
-/// and deterministic 60fps <see cref="OnTick"/> state broadcasting without locks.
+/// (<c>ValueTask&lt;T&gt;</c> and Cysharp <c>UniTask&lt;T&gt;</c>) and deterministic 60fps <see cref="OnTick"/> state broadcasting without locks.
 /// </summary>
 [HayabusaService]
 public sealed partial class BattleRoomService : RoomActor
@@ -41,6 +42,15 @@ public sealed partial class BattleRoomService : RoomActor
     {
         UpdatePlayerPosition(Context.ConnectionId, command);
         return new ValueTask<WorldSnapshot>(new WorldSnapshot(CurrentTick, PlayerCount));
+    }
+
+    /// <summary>
+    /// Returns the current room snapshot using Cysharp <c>UniTask&lt;T&gt;</c> with zero heap allocation.
+    /// </summary>
+    [Rpc(MethodId = 10)]
+    public UniTask<WorldSnapshot> GetWorldSnapshotUniTaskAsync()
+    {
+        return UniTask.FromResult(new WorldSnapshot(CurrentTick, PlayerCount));
     }
 
     /// <summary>
