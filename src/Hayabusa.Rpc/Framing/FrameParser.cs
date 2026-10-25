@@ -51,13 +51,19 @@ public static class FrameParser
         }
 
         int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(input.Slice(2, 4));
-        if ((uint)payloadLength > (uint)maxFrameSize)
+        if (!IsPayloadLengthWithinBounds(payloadLength, maxFrameSize))
         {
             return FrameParseError.PayloadTooLarge;
         }
 
         return TryParseBody(input, payloadLength, out frame);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsPayloadLengthWithinBounds(int payloadLength, int maxFrameSize) =>
+        maxFrameSize >= 0
+        && (uint)payloadLength <= (uint)maxFrameSize
+        && payloadLength <= int.MaxValue - RpcHeader.Size;
 
     /// <summary>
     /// Writes a complete RPC frame (12-byte header + raw payload bytes) directly into <paramref name="writer"/>.
