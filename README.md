@@ -4,6 +4,35 @@
 
 `Hayabusa` は、ASP.NET Core (Kestrel) の汎用的な抽象化コストを極限まで削ぎ落とし、**ゼロアロケーション・構造体・C# Source Generator・アンマネージド/Pinned メモリ・Thread-per-Core イベントループ**によって、**「Kestrel を超えるステートレス API / RPC 性能」**と**「60fps/30fps の Tick 同期・Room (Actor) 状態管理を内包したリアルタイムゲームサーバー」**を単一ランタイムで両立する次世代サーバーエンジンです。
 
+> **初めての方へ — 誰でもゼロから実装できる完全クイックスタート**:
+> 環境準備から Web API・MemoryPack RPC・60fps ゲームルーム（`RoomActor`）・クライアント実装・単体テスト・Docker / NativeAOT デプロイまでの全手順は **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)** にステップバイステップでまとめています。
+
+---
+
+## 目次
+
+1. **[クイックスタート（専用階層ガイド）](quickstart/クイックスタート.md)**
+   - **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)** — **誰でもゼロから実装できる完全入門書（Web / RPC / 60fps ゲームルーム / クライアント / テスト）**
+   - **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)** — **ステートレス Web / HTTP API サーバー特化ガイド**
+2. **[コンセプトと解決する課題](#コンセプトと解決する課題)**
+3. **[アーキテクチャの4大ピラー](#アーキテクチャの4大ピラー)**
+   - [1. Cysharp エコシステム × 最新 C# によるゼロアロケーション設計](#1-cysharp-エコシステム--最新-c-によるゼロアロケーション設計)
+   - [2. Thread-per-Core + LogicLooper 風 Tick ループ & Room (Actor) アフィニティ](#2-thread-per-core--logiclooper-風-tick-ループ--room-actor-アフィニティ)
+   - [3. 2つの開発者体験（Source Generator 属性ルーティング & Minimal API 風）](#3-2つの開発者体験source-generator-属性ルーティング--minimal-api-風)
+4. **[リポジトリ・モジュール構成](#リポジトリモジュール構成)**
+5. **[クイックスタート（サーバーの立ち上げ方・ローカル開発環境）](#クイックスタートサーバーの立ち上げ方ローカル開発環境)**
+   - [0. 最短で Web サーバーを構築して動かす（Minimal API & Source Generator）](#0-最短で-web-サーバーを構築して動かすminimal-api--source-generator)
+   - [1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）](#1-docker-compose-で即座にサーバーを立てるnet-sdk-のインストール不要)
+   - [2. 環境変数・起動オプションによるゼロコンフィグ設定 & ロール分離（Web単体 / ゲーム単体 / 両方）](#2-環境変数起動オプションによるゼロコンフィグ設定--ロール分離web単体--ゲーム単体--両方)
+   - [3. 自分のプロジェクトで Hayabusa サーバーを作る（NuGet / `dotnet new` テンプレート）](#3-自分のプロジェクトで-hayabusa-サーバーを作るnuget--dotnet-new-テンプレート)
+   - [4. `.devcontainer` を使ったローカル開発（Cursor / VS Code 対応）](#4-devcontainer-を使ったローカル開発cursor--vs-code-対応)
+6. **[Cysharp OSS の導入状況と統合計画](#cysharp-oss-の導入状況と統合計画)**
+7. **[プロジェクト Skills（品質・アーキテクチャ規約 / Cursor・Claude・Codex 完全統一）](#プロジェクト-skills品質アーキテクチャ規約--cursorclaudecodex-完全統一)**
+8. **[ベンチマーク計測（Hayabusa vs Go `net/http` vs Rust `axum` / `tokio`）](#ベンチマーク計測hayabusa-vs-go-nethttp-vs-rust-axum--tokio)**
+9. **[ライセンスと帰属表示（License, Attribution & Disclaimer）](#ライセンスと帰属表示license-attribution--disclaimer)**
+   - [プロジェクトライセンス](#プロジェクトライセンス)
+   - [サードパーティ OSS ライセンス（Cysharp, Inc.）](#サードパーティ-oss-ライセンスcysharp-inc)
+
 ---
 
 ## コンセプトと解決する課題
@@ -138,6 +167,10 @@ hayabusa/
 ├── scripts/
 │   ├── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
 │   └── run-cross-lang-benchmarks.sh # Hayabusa vs Go vs Rust クロス言語ベンチマーク実行スクリプト (Docker / Ephemeral 自動切替)
+├── quickstart/
+│   └── クイックスタート.md           # 誰でもゼロから実装できる完全クイックスタートガイド (Web / RPC / Game Room / Client / Test)
+├── docs/
+│   └── WEB_SERVER_QUICKSTART.md     # Web サーバー構築クイックスタートガイド (Minimal API / Source Generator / Docker)
 ├── .devcontainer/                   # VS Code / Cursor 用 DevContainer (.NET 9 + liburing + 拡張機能永続化)
 │   ├── devcontainer.json
 │   └── Dockerfile
@@ -175,6 +208,59 @@ hayabusa/
 
 さまざまな開発者・運用者が用途に応じてすぐに `Hayabusa` サーバーを立てて使用できるよう、以下の方法を用意しています。
 
+> **【推奨】誰でもゼロから実装できるステップバイステップ完全ガイド**:
+> - **[`quickstart/クイックスタート.md`](quickstart/クイックスタート.md)**: 事前準備・新規プロジェクト作成から、Web API・`MemoryPack` バイナリ RPC・60fps ゲームルーム（`RoomActor`）・C#/Unity クライアント呼び出し・インメモリ単体テスト・NativeAOT / Docker デプロイ・FAQ まで、コピー＆ペーストで動かせる完全入門ガイドです。
+> - **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)**: ステートレス Web / HTTP API サーバー構築に特化したガイドです。
+
+### 0. 最短で Web サーバーを構築して動かす（Minimal API & Source Generator）
+
+`UseWebServerOnly()`（または CLI 引数 `--web-only` / 環境変数 `HAYABUSA_ROLE=web`）を指定すると、ゲーム用の定周期 Tick スケジューラを停止し、**CPU コアごとの専用ワーカースレッドを 100% HTTP/1.1 リクエスト処理に専念させる高速 Web サーバー**として起動できます。
+
+```csharp
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Hayabusa.Rpc;
+using Hayabusa.Runtime.Hosting;
+
+// 1. Web サーバー専用モード (HTTP ポート 8000) で構築
+using HayabusaApp app = HayabusaApp.CreateBuilder(args)
+    .UseWebServerOnly(httpPort: 8000)
+    .Build();
+
+// 2. Minimal API スタイルでのエンドポイント定義 (ゼロアロケーション出力)
+app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+app.MapGet("/api/status", static ctx => ctx.WriteJsonUtf8("""{"status":"ok","engine":"Hayabusa"}"""u8));
+app.MapGet("/api/core", static ctx => ctx.WriteZString("Handled by Core #{0}", ctx.CoreIndex.Value));
+app.MapPost("/api/echo", static ctx => ctx.WriteJsonUtf8("""{"received":true}"""u8));
+
+// 3. Source Generator 属性ルーティング ([HayabusaService] + [Get] / [Post]) の登録も可能
+app.MapService<UserWebService>();
+
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+await app.RunAsync(cts.Token);
+
+[HayabusaService]
+public sealed partial class UserWebService
+{
+    // {id} は Utf8Parser によりゼロアロケーションで int にバインドされる
+    [Get("/users/{id}")]
+    public void GetUser(int id) => _ = id;
+}
+```
+
+リポジトリ同梱のサンプルサーバーを Web 専用モードで即座に試す場合は、以下のコマンドを実行します。
+
+```bash
+# サンプルサーバーを Web 専用モード (Port: 8000) で起動
+dotnet run --project samples/Hayabusa.SampleServer -c Release -- --web-only --http-port 8000
+
+# 別ターミナルから動作確認
+curl -i http://localhost:8000/health
+curl -i http://localhost:8000/api/status
+```
+
 ### 1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）
 
 Docker さえあれば、1コマンドで `io_uring` 最適化設定済みの `Hayabusa` サーバーを起動できます。
@@ -183,7 +269,7 @@ Docker さえあれば、1コマンドで `io_uring` 最適化設定済みの `H
 # 設定をカスタマイズする場合は .env を作成（省略時はデフォルト値で起動）
 cp .env.example .env
 
-# サーバーのビルドと起動（HTTP: 5000, MemoryPack RPC / Room: 5001）
+# サーバーのビルドと起動（HTTP: 8000, MemoryPack RPC / Room: 8001）
 docker compose up -d --build
 ```
 
@@ -199,21 +285,21 @@ docker compose build --build-arg PUBLISH_AOT=true
 
 ```csharp
 // 1. Web サーバー単体として起動 (Game Tick スケジューラを停止し、HTTP 処理に 100% 専念)
-var webApp = HayabusaApp.CreateBuilder(args).UseWebServerOnly(httpPort: 5000).Build();
+var webApp = HayabusaApp.CreateBuilder(args).UseWebServerOnly(httpPort: 8000).Build();
 
 // 2. ゲームサーバー単体として起動 (HTTP パーサを無効化し、MemoryPack RPC & 60fps Tick に専念)
-var gameApp = HayabusaApp.CreateBuilder(args).UseGameServerOnly(tickRateHz: 60, rpcPort: 5001).Build();
+var gameApp = HayabusaApp.CreateBuilder(args).UseGameServerOnly(tickRateHz: 60, rpcPort: 8001).Build();
 
 // 3. Web + ゲームサーバー両方として起動 (デフォルト: HTTP と Game RPC/Tick の両方を単一ランタイムで処理)
-var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 5000, rpcPort: 5001, tickRateHz: 60).Build();
+var hybridApp = HayabusaApp.CreateBuilder(args).UseWebAndGameServer(httpPort: 8000, rpcPort: 8001, tickRateHz: 60).Build();
 ```
 
 | 環境変数 | CLI 引数 | デフォルト値 | 説明 |
 | --- | --- | --- | --- |
 | `HAYABUSA_ROLE` | `--role` (`--web-only` / `--game-only` / `--web-and-game`) | `both` (`WebAndGame`) | `web`（Web サーバー単体）、`game`（ゲームサーバー単体）、`both`（Web・ゲーム両方受け入れ） |
 | `HAYABUSA_BIND_ADDRESS` | `--bind` | `0.0.0.0` | バインドする IP アドレス |
-| `HAYABUSA_HTTP_PORT` | `--http-port` | `5000` | HTTP / Minimal API 待ち受けポート |
-| `HAYABUSA_RPC_PORT` | `--rpc-port` | `5001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
+| `HAYABUSA_HTTP_PORT` | `--http-port` | `8000` | HTTP / Minimal API 待ち受けポート |
+| `HAYABUSA_RPC_PORT` | `--rpc-port` | `8001` | MemoryPack RPC / リアルタイム Room 待ち受けポート |
 | `HAYABUSA_WORKER_THREADS` | `--workers` | `0` | Thread-per-Core スレッド数（`0` でコンテナの CPU コア数を自動検出） |
 | `HAYABUSA_TICK_RATE` | `--tick-rate` | `60` | Room (Actor) の定周期 Tick レート（Hz: `60` = 60fps、`30` = 30fps） |
 | `HAYABUSA_TRANSPORT` | `--transport` | `auto` | `auto`（Linux `io_uring` 優先・非対応環境では `socket` へ自動フォールバック）、`io_uring`、`socket` |
@@ -279,26 +365,6 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 | **Thread-per-Core & Tick 統合** | [`.cursor/skills/thread-per-core-game-loop/SKILL.md`](.cursor/skills/thread-per-core-game-loop/SKILL.md) | 1コア1スレッド固定ループ、Deadline 連動 I/O Wait と LogicLooper 風 Tick の統合、Room アフィニティとロックフリー MPSC Mailbox |
 | **ベンチマーク & プロファイリング** | [`.cursor/skills/benchmarking-and-profiling/SKILL.md`](.cursor/skills/benchmarking-and-profiling/SKILL.md) | `BenchmarkDotNet`（`MemoryDiagnoser` / `DisassemblyDiagnoser`）による Kestrel 比較指標とアロケーション 0B ゲート |
 | **配布・コンテナ化・導入体験** | [`.cursor/skills/distribution-and-containerization/SKILL.md`](.cursor/skills/distribution-and-containerization/SKILL.md) | Docker / NuGet / `dotnet new` テンプレートの3経路配布、環境変数によるゼロコンフィグ起動、`io_uring` 自動フォールバック、`.devcontainer` 永続化規約 |
-
----
-
-## 実装ロードマップ
-
-- [x] **Phase 0: 設計方針策定 & Skills / アーキテクチャ規約整備**
-- [x] **Phase 1: `Hayabusa.Core` & `Hayabusa.Rpc` コア基盤実装**
-  - 強い型プリミティブ（`ConnectionId`, `RoomId`, `MethodId`, `TickNumber`, `CoreIndex`）
-  - Thread-Local Slab Pool / Pinned RingBuffer & リーク検知機構
-  - MemoryPack RPC フレームパーサ & 最小 HTTP パーサ（単体テスト & ペネトレーションテスト含む）
-- [x] **Phase 2: `Hayabusa.Runtime`（Thread-per-Core + LogicLooper 風 Tick + Room Actor）実装**
-  - コア固定ワーカースレッド、ロックフリー MPSC Mailbox、Timing Wheel タイムアウト管理
-  - `RoomActor` 基底クラスと定周期 Tick スケジューラ
-- [x] **Phase 3: `Hayabusa.Generator`（C# Incremental Source Generator）実装**
-  - `[HayabusaService]` / `[Rpc]` / `[Get]` / `[Post]` からのゼロアロケーションディスパッチャ & クライアント自動生成
-- [x] **Phase 4: `Hayabusa.Transport`（Linux `io_uring` & Cross-Platform Socket IOCP）実装**
-  - Completion トランスポート層とバッチ Submit パイプライン
-- [x] **Phase 5: `Hayabusa.Benchmarks` & `Hayabusa.SampleServer`**
-  - Kestrel / MagicOnion とのベンチマーク比較とリアルタイムゲームルームデモ
-  - Go 標準 (`net/http`) および Rust 標準 (`axum` / `tokio`) との Docker 完結型クロス言語 Web サーバーベンチマーク
 
 ---
 

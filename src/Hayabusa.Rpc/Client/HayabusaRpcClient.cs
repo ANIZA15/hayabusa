@@ -515,6 +515,11 @@ public sealed class HayabusaRpcClient : IDisposable
 
     private async ValueTask FillReceiveBufferAsync(CancellationToken cancellationToken)
     {
+        if (_bufferedBytes >= _receiveBuffer.Length)
+        {
+            throw new InvalidOperationException("RPC client receive buffer capacity exceeded.");
+        }
+
         int read = await _stream!.ReadAsync(_receiveBuffer.AsMemory(_bufferedBytes), cancellationToken);
         if (read <= 0)
         {

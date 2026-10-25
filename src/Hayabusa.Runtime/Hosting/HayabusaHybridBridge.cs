@@ -10,6 +10,7 @@ using Hayabusa.Rpc.Framing;
 using Hayabusa.Rpc.Http;
 using Hayabusa.Runtime.Engine;
 using Hayabusa.Transport;
+using MemoryPack;
 
 namespace Hayabusa.Runtime.Hosting;
 
@@ -42,13 +43,21 @@ public static class HayabusaHybridBridge
         var context = new HayabusaContext(CoreIndex.Zero, responseWriter);
         context.Bind(effectiveConn, RoomId.Invalid, TickNumber.Zero, clearWriter: false);
 
-        if (app.Dispatcher.TryDispatchMinimalSync(context, in slice, responseWriter))
+        try
         {
-            return true;
-        }
+            if (app.Dispatcher.TryDispatchMinimalSync(context, in slice, responseWriter))
+            {
+                return true;
+            }
 
-        ReadOnlyMemory<byte> payloadSlice = rawFrame.Slice(RpcHeader.Size, slice.Header.PayloadLength);
-        return await app.Dispatcher.DispatchAsync(context, slice.Header.MethodId, payloadSlice, responseWriter);
+            ReadOnlyMemory<byte> payloadSlice = rawFrame.Slice(RpcHeader.Size, slice.Header.PayloadLength);
+            return await app.Dispatcher.DispatchAsync(context, slice.Header.MethodId, payloadSlice, responseWriter);
+        }
+        catch (MemoryPackSerializationException)
+        {
+            responseWriter.Clear();
+            return false;
+        }
     }
 
     /// <summary>

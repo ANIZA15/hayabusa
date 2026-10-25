@@ -112,11 +112,15 @@ public sealed class TimingWheel
             return 0;
         }
 
-        _lastSweepTimestamp = now;
         int count = CollectExpiredIds(now, expiredBuffer);
         for (int i = 0; i < count; i++)
         {
             _entries.Remove(expiredBuffer[i]);
+        }
+
+        if (count < expiredBuffer.Length)
+        {
+            _lastSweepTimestamp = now;
         }
 
         return count;

@@ -23,6 +23,7 @@ namespace Hayabusa.Tests;
 public sealed class RpcHttpAndClientExtendedTests
 {
     private static readonly int[] s_sampleIntPair = [10, 20];
+
     [Fact]
     public void RpcAndHttpAttributes_PropertiesAndValidation_StoreExpectedMetadata()
     {
@@ -121,6 +122,7 @@ public sealed class RpcHttpAndClientExtendedTests
 
     [Theory]
     [InlineData("CONNECT /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
+    [InlineData("TRACE /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("PATCH /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("BAD /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("FOUR /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]

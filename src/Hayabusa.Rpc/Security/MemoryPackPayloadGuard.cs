@@ -37,11 +37,16 @@ public static class MemoryPackPayloadGuard
         int declaredCount = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(0, 4));
         if (declaredCount == -1)
         {
-            // MemoryPack null collection marker (-1) is safe and allocates nothing.
+            // MemoryPack null collection/string marker (-1) is safe and allocates nothing.
             return true;
         }
 
-        if (declaredCount < 0 || declaredCount > maxElementCount)
+        if (declaredCount < -1)
+        {
+            return ValidateUtf8StringHeader(payload, declaredCount, maxElementCount);
+        }
+
+        if (declaredCount > maxElementCount)
         {
             return false;
         }
@@ -49,6 +54,27 @@ public static class MemoryPackPayloadGuard
         int remainingBytes = payload.Length - 4;
         long requiredMinBytes = (long)declaredCount * Math.Max(1, minElementByteSize);
         return requiredMinBytes <= remainingBytes;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ValidateUtf8StringHeader(
+        scoped ReadOnlySpan<byte> payload,
+        int declaredBitwiseNotByteCount,
+        int maxElementCount)
+    {
+        if (payload.Length < 8)
+        {
+            return false;
+        }
+
+        int utf8ByteCount = ~declaredBitwiseNotByteCount;
+        int utf16CharCount = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(4, 4));
+        if (utf8ByteCount > maxElementCount || utf8ByteCount > payload.Length - 8)
+        {
+            return false;
+        }
+
+        return (uint)utf16CharCount <= (uint)utf8ByteCount;
     }
 
     /// <summary>
@@ -63,7 +89,8 @@ public static class MemoryPackPayloadGuard
         int maxElementCount = DefaultMaxElementCount)
     {
         value = default;
-        if (isCollectionOrStringRoot && !ValidateCollectionHeader(payload, 1, maxElementCount))
+        if ((isCollectionOrStringRoot || typeof(T) == typeof(string))
+            && !ValidateCollectionHeader(payload, 1, maxElementCount))
         {
             return false;
         }

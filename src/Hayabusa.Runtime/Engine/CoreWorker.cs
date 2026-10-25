@@ -274,6 +274,7 @@ public sealed class CoreWorker : IDisposable
         switch (ev.Operation)
         {
             case TransportOperationKind.Accept:
+                ReturnSlabIfPresent(ev.SlabToken);
                 HandleAccept(ev.ConnectionId);
                 break;
             case TransportOperationKind.Receive:
@@ -351,7 +352,10 @@ public sealed class CoreWorker : IDisposable
             }
         }
 
-        EnqueueBufferedResponseIfAny(connectionId);
+        if (_receiveBuffers.ContainsKey(connectionId))
+        {
+            EnqueueBufferedResponseIfAny(connectionId);
+        }
     }
 
     private bool TryDrainSingleFrameFromBuffer(ConnectionId connectionId, ContiguousReceiveBuffer buffer)
@@ -503,6 +507,7 @@ public sealed class CoreWorker : IDisposable
             return;
         }
 
+        FlushSubmissionQueueIfFull();
         if (_transport.SlabPool.TryRentSlot(out int slotIndex, out uint generation))
         {
             Span<byte> slotSpan = _transport.SlabPool.GetSlotSpan(slotIndex, generation);
@@ -553,13 +558,29 @@ public sealed class CoreWorker : IDisposable
             return;
         }
 
-        _context.Bind(msg.ConnectionId, msg.RoomId, _tickScheduler.CurrentTick);
-        ReadOnlyMemory<byte> bodySlice = msg.PayloadFrame.Slice(RpcHeader.Size, slice.Header.PayloadLength);
-        ValueTask<bool> task = room.TryDispatchRpcAsync(_context, slice.Header.MethodId, bodySlice, _responseWriter);
-        if (task.IsCompleted)
+        ExecuteRoomMailboxRpc(room, in msg, in slice);
+    }
+
+    private void ExecuteRoomMailboxRpc(RoomActor room, in CrossCoreRpcMessage msg, in FrameSlice slice)
+    {
+        try
         {
-            _ = task.GetAwaiter().GetResult();
-            EnqueueBufferedResponseIfAny(msg.ConnectionId);
+            _context.Bind(msg.ConnectionId, msg.RoomId, _tickScheduler.CurrentTick);
+            ReadOnlyMemory<byte> bodySlice = msg.PayloadFrame.Slice(RpcHeader.Size, slice.Header.PayloadLength);
+            ValueTask<bool> task = room.TryDispatchRpcAsync(_context, slice.Header.MethodId, bodySlice, _responseWriter);
+            if (task.IsCompletedSuccessfully)
+            {
+                _ = task.GetAwaiter().GetResult();
+                EnqueueBufferedResponseIfAny(msg.ConnectionId);
+                return;
+            }
+
+            AwaitRpcContinuation(msg.ConnectionId, task.AsUniTask()).Forget();
+        }
+        catch (MemoryPackSerializationException)
+        {
+            _logger?.ZLogWarning($"Room mailbox MemoryPack deserialization failed on {_coreIndex} for {msg.ConnectionId}");
+            EvictConnection(msg.ConnectionId, enqueueTransportDisconnect: true);
         }
     }
 
@@ -588,10 +609,18 @@ public sealed class CoreWorker : IDisposable
 
     private void SweepPhase3Timeouts()
     {
-        int expiredCount = _timingWheel.SweepExpired(_expiredScratch);
-        for (int i = 0; i < expiredCount; i++)
+        while (true)
         {
-            EvictConnection(_expiredScratch[i], enqueueTransportDisconnect: true);
+            int expiredCount = _timingWheel.SweepExpired(_expiredScratch);
+            for (int i = 0; i < expiredCount; i++)
+            {
+                EvictConnection(_expiredScratch[i], enqueueTransportDisconnect: true);
+            }
+
+            if (expiredCount < _expiredScratch.Length)
+            {
+                break;
+            }
         }
     }
 
@@ -620,6 +649,7 @@ public sealed class CoreWorker : IDisposable
 
     private void EvictConnection(ConnectionId connectionId, bool enqueueTransportDisconnect)
     {
+        _responseWriter.Clear();
         _receiveBuffers.Remove(connectionId);
         _timingWheel.Remove(connectionId);
         _rateLimiter.Remove(connectionId);
@@ -627,7 +657,18 @@ public sealed class CoreWorker : IDisposable
 
         if (enqueueTransportDisconnect)
         {
+            FlushSubmissionQueueIfFull();
             _submissionQueue.TryEnqueueDisconnect(connectionId);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FlushSubmissionQueueIfFull()
+    {
+        if (_submissionQueue.Count >= _submissionQueue.Capacity)
+        {
+            _transport.SubmitAndWait(_submissionQueue.PendingEntries, TimeSpan.Zero);
+            _submissionQueue.Clear();
         }
     }
 
