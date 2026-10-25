@@ -138,7 +138,7 @@ internal static class ServiceModelParser
 
     private static void TryAddRpcMethod(IMethodSymbol method, AttributeData rpcAttr, BuilderAccumulator acc)
     {
-        int methodId = ExtractMethodId(rpcAttr);
+        int methodId = ResolveMethodId(method, rpcAttr);
         Location? loc = GetSymbolFirstLocation(method);
         if (methodId <= 0 || !acc.SeenMethodIds.Add(methodId))
         {
@@ -149,48 +149,86 @@ internal static class ServiceModelParser
             return;
         }
 
-        if (!TryValidateReturnType(method, acc, out (string FullName, bool HasPayload, bool IsUniTask) resInfo))
+        if (!TryValidateReturnType(method, acc, out (string FullName, bool HasPayload, bool IsAsync) resInfo))
         {
             return;
         }
 
-        if (!TryValidateRequestType(method, acc, out (string FullName, bool HasParameter) reqInfo))
+        if (!TryExtractParameters(method, acc, out EquatableArray<RpcParameterModel> parameters))
         {
             return;
         }
 
-        acc.RpcMethods.Add(new RpcMethodModel(method.Name, methodId, reqInfo, resInfo));
+        acc.RpcMethods.Add(new RpcMethodModel(method.Name, methodId, parameters, resInfo));
     }
 
-    private static int ExtractMethodId(AttributeData rpcAttr)
+    private static int ResolveMethodId(IMethodSymbol method, AttributeData rpcAttr)
+    {
+        if (TryExtractExplicitMethodId(rpcAttr, out int explicitId))
+        {
+            return explicitId;
+        }
+
+        return ComputeDeterministicMethodId(method.ContainingType.Name, method.Name);
+    }
+
+    private static bool TryExtractExplicitMethodId(AttributeData rpcAttr, out int methodId)
     {
         if (rpcAttr.ConstructorArguments.Length > 0 && rpcAttr.ConstructorArguments[0].Value is int ctorId)
         {
-            return ctorId;
+            methodId = ctorId;
+            return true;
         }
 
-        ImmutableArray<KeyValuePair<string, TypedConstant>> named = rpcAttr.NamedArguments;
+        return TryFindNamedMethodId(rpcAttr.NamedArguments, out methodId);
+    }
+
+    private static bool TryFindNamedMethodId(
+        ImmutableArray<KeyValuePair<string, TypedConstant>> named,
+        out int methodId)
+    {
         for (int i = 0; i < named.Length; i++)
         {
             if (named[i].Key == "MethodId" && named[i].Value.Value is int namedId)
             {
-                return namedId;
+                methodId = namedId;
+                return true;
             }
         }
 
-        return 0;
+        methodId = 0;
+        return false;
+    }
+
+    private static int ComputeDeterministicMethodId(string serviceName, string methodName)
+    {
+        uint hash = HashStringFnv1a(2166136261u, serviceName);
+        hash = (hash ^ '.') * 16777619u;
+        hash = HashStringFnv1a(hash, methodName);
+        int positive = (int)(hash & 0x7FFFFFFFu);
+        return positive == 0 ? 1 : positive;
+    }
+
+    private static uint HashStringFnv1a(uint seed, string text)
+    {
+        uint hash = seed;
+        for (int i = 0; i < text.Length; i++)
+        {
+            hash = (hash ^ text[i]) * 16777619u;
+        }
+
+        return hash;
     }
 
     private static bool TryValidateReturnType(
         IMethodSymbol method,
         BuilderAccumulator acc,
-        out (string FullName, bool HasPayload, bool IsUniTask) responseInfo)
+        out (string FullName, bool HasPayload, bool IsAsync) responseInfo)
     {
         responseInfo = (string.Empty, false, false);
         ITypeSymbol returnType = method.ReturnType;
-        string returnName = returnType.Name;
 
-        if (returnName != "ValueTask" && returnName != "UniTask")
+        if (IsProhibitedAsyncReturnType(method, returnType))
         {
             acc.Diagnostics.Add(new EquatableDiagnostic(
                 HayabusaDiagnostics.InvalidRpcReturnType.Id,
@@ -199,21 +237,27 @@ internal static class ServiceModelParser
             return false;
         }
 
-        bool isUniTask = returnName == "UniTask";
-        return TryExtractGenericReturnPayload(method, returnType, isUniTask, acc) is { } valid &&
-               AssignOut(valid, out responseInfo);
+        if (returnType.Name is "ValueTask" or "UniTask")
+        {
+            return TryExtractAsyncReturnPayload(method, returnType, acc) is { } valid &&
+                   AssignOut(valid, out responseInfo);
+        }
+
+        return TryExtractSyncReturnPayload(method, returnType, acc, out responseInfo);
     }
 
-    private static (string FullName, bool HasPayload, bool IsUniTask)? TryExtractGenericReturnPayload(
+    private static bool IsProhibitedAsyncReturnType(IMethodSymbol method, ITypeSymbol returnType) =>
+        returnType.Name == "Task" || (method.IsAsync && returnType.SpecialType == SpecialType.System_Void);
+
+    private static (string FullName, bool HasPayload, bool IsAsync)? TryExtractAsyncReturnPayload(
         IMethodSymbol method,
         ITypeSymbol returnType,
-        bool isUniTask,
         BuilderAccumulator acc)
     {
         if (returnType is not INamedTypeSymbol { IsGenericType: true } genericReturn ||
             genericReturn.TypeArguments.Length != 1)
         {
-            return (string.Empty, false, isUniTask);
+            return (string.Empty, false, true);
         }
 
         ITypeSymbol innerType = genericReturn.TypeArguments[0];
@@ -223,7 +267,30 @@ internal static class ServiceModelParser
             return null;
         }
 
-        return (innerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), true, isUniTask);
+        return (innerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), true, true);
+    }
+
+    private static bool TryExtractSyncReturnPayload(
+        IMethodSymbol method,
+        ITypeSymbol returnType,
+        BuilderAccumulator acc,
+        out (string FullName, bool HasPayload, bool IsAsync) responseInfo)
+    {
+        if (returnType.SpecialType == SpecialType.System_Void)
+        {
+            responseInfo = (string.Empty, false, false);
+            return true;
+        }
+
+        if (!IsMemoryPackCompatible(returnType))
+        {
+            ReportNotMemoryPackable(returnType, method, acc);
+            responseInfo = (string.Empty, false, false);
+            return false;
+        }
+
+        responseInfo = (returnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), true, false);
+        return true;
     }
 
     private static bool AssignOut<T>(T value, out T target)
@@ -232,25 +299,35 @@ internal static class ServiceModelParser
         return true;
     }
 
-    private static bool TryValidateRequestType(
+    private static bool TryExtractParameters(
         IMethodSymbol method,
         BuilderAccumulator acc,
-        out (string FullName, bool HasParameter) requestInfo)
+        out EquatableArray<RpcParameterModel> parameters)
     {
-        requestInfo = (string.Empty, false);
-        if (method.Parameters.Length == 0)
+        ImmutableArray<IParameterSymbol> methodParams = method.Parameters;
+        if (methodParams.Length == 0)
         {
+            parameters = EquatableArray<RpcParameterModel>.Empty;
             return true;
         }
 
-        ITypeSymbol paramType = method.Parameters[0].Type;
-        if (!IsMemoryPackCompatible(paramType))
+        ImmutableArray<RpcParameterModel>.Builder builder = ImmutableArray.CreateBuilder<RpcParameterModel>(methodParams.Length);
+        for (int i = 0; i < methodParams.Length; i++)
         {
-            ReportNotMemoryPackable(paramType, method, acc);
-            return false;
+            IParameterSymbol param = methodParams[i];
+            if (!IsMemoryPackCompatible(param.Type))
+            {
+                ReportNotMemoryPackable(param.Type, method, acc);
+                parameters = EquatableArray<RpcParameterModel>.Empty;
+                return false;
+            }
+
+            builder.Add(new RpcParameterModel(
+                param.Name,
+                param.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)));
         }
 
-        requestInfo = (paramType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), true);
+        parameters = new EquatableArray<RpcParameterModel>(builder.ToImmutable());
         return true;
     }
 

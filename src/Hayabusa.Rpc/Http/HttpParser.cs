@@ -163,9 +163,7 @@ public static class HttpParser
     {
         return token.Length switch
         {
-            3 => token[0] == (byte)'G' && token[1] == (byte)'E' && token[2] == (byte)'T'
-                ? HttpMethodKind.Get
-                : (token[0] == (byte)'P' && token[1] == (byte)'U' && token[2] == (byte)'T' ? HttpMethodKind.Put : HttpMethodKind.Unknown),
+            3 => ResolveThreeByteMethod(token),
             4 => BinaryPrimitives.ReadUInt32LittleEndian(token) switch
             {
                 0x54534F50u => HttpMethodKind.Post, // "POST" in Little-Endian
@@ -175,6 +173,17 @@ public static class HttpParser
             6 => token.SequenceEqual("DELETE"u8) ? HttpMethodKind.Delete : HttpMethodKind.Unknown,
             _ => HttpMethodKind.Unknown,
         };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static HttpMethodKind ResolveThreeByteMethod(scoped ReadOnlySpan<byte> token)
+    {
+        if (token.SequenceEqual("GET"u8))
+        {
+            return HttpMethodKind.Get;
+        }
+
+        return token.SequenceEqual("PUT"u8) ? HttpMethodKind.Put : HttpMethodKind.Unknown;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -299,22 +308,26 @@ public static class HttpParser
     {
         // Fast-path length filter: "Content-Length" is 14 bytes, "Transfer-Encoding" is 17 bytes.
         // Skips string comparison for Host, User-Agent, Accept, Connection, etc. in 1 CPU cycle.
-        if (name.Length != 14 && name.Length != 17)
-        {
-            return HttpParseError.None;
-        }
-
         if (name.Length == 17 && Ascii.EqualsIgnoreCase(name, "Transfer-Encoding"u8))
         {
             state.HasTransferEncoding = true;
             return HttpParseError.RequestSmugglingDetected;
         }
 
-        if (name.Length != 14 || !Ascii.EqualsIgnoreCase(name, "Content-Length"u8))
+        if (name.Length == 14 && Ascii.EqualsIgnoreCase(name, "Content-Length"u8))
         {
-            return HttpParseError.None;
+            return InspectContentLengthHeader(value, ref state, ref contentLength);
         }
 
+        return HttpParseError.None;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static HttpParseError InspectContentLengthHeader(
+        scoped ReadOnlySpan<byte> value,
+        ref SmugglingCheckState state,
+        ref int contentLength)
+    {
         if (state.HasContentLength || state.HasTransferEncoding)
         {
             return HttpParseError.RequestSmugglingDetected;

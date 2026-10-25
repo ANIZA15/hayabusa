@@ -181,6 +181,16 @@ public sealed class HayabusaApp : IDisposable
     }
 
     /// <summary>
+    /// Instantiates and registers a source-generated <typeparamref name="TService"/> with the server dispatcher.
+    /// </summary>
+    public HayabusaApp MapService<TService>()
+        where TService : IHayabusaRpcService, new()
+    {
+        _dispatcher.RegisterService(new TService());
+        return this;
+    }
+
+    /// <summary>
     /// Registers a framework-agnostic <see cref="IGameLoopTickHandler"/> across all worker cores (or a specific core)
     /// so non-MagicOnion / custom ECS / custom game loop architectures can run deterministically on Hayabusa.
     /// </summary>
@@ -232,6 +242,31 @@ public sealed class HayabusaApp : IDisposable
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
         int methodId,
         HayabusaRpcHandler<TRequest, TResponse> handler)
+    {
+        _dispatcher.MapRpc(methodId, handler);
+        return this;
+    }
+
+    /// <summary>
+    /// Maps a compact context-free binary MemoryPack RPC handler to <paramref name="methodId"/>.
+    /// </summary>
+    public HayabusaApp MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TRequest,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TRequest, TResponse> handler)
+    {
+        _dispatcher.MapRpc(methodId, handler);
+        return this;
+    }
+
+    /// <summary>
+    /// Maps a parameterless binary MemoryPack RPC handler to <paramref name="methodId"/>.
+    /// </summary>
+    public HayabusaApp MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TResponse> handler)
     {
         _dispatcher.MapRpc(methodId, handler);
         return this;

@@ -12,8 +12,9 @@ description: >-
 
 ## 1. 言語・ランタイム基準
 
-- **対象ターゲット**: `.NET 9.0` 以上（`LangVersion: latest` / C# 13+）
-- **プロジェクト共通設定（`Directory.Build.props`）**:
+- **対象ターゲット**: `.NET 9.0` / `.NET 10.0` マルチターゲット + 将来の `.NET 11.0+` への動的ロールフォワード対応（`LangVersion: latest` / C# 13・C# 14+）
+- **プロジェクト共通設定（`Directory.Build.props` / `global.json`）**:
+  - `global.json` に `"rollForward": "latestMajor"`, `"allowPrerelease": true` を指定し、`.NET 10` / `.NET 11+` SDK 環境でもそのままビルド・実行可能にする
   - `<Nullable>enable</Nullable>`
   - `<ImplicitUsings>disable</ImplicitUsings>`（明示的な `using` により依存関係を可視化する）
   - `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`

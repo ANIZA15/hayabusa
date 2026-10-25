@@ -71,6 +71,51 @@ public sealed class RpcDispatcher
             return true;
         };
 
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    /// <summary>
+    /// Registers a compact context-free binary MemoryPack RPC handler for <paramref name="methodId"/>.
+    /// </summary>
+    public void MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TRequest,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TRequest, TResponse> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        MinimalRpcInvokeDelegate invoker = (_, id, payload, writer) =>
+        {
+            TRequest? req = MemoryPackSerializer.Deserialize<TRequest>(payload);
+            TResponse res = handler(req!);
+            FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
+            return true;
+        };
+
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    /// <summary>
+    /// Registers a parameterless binary MemoryPack RPC handler for <paramref name="methodId"/>.
+    /// </summary>
+    public void MapRpc<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TResponse>(
+        int methodId,
+        Func<TResponse> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        MinimalRpcInvokeDelegate invoker = (_, id, _, writer) =>
+        {
+            TResponse res = handler();
+            FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
+            return true;
+        };
+
+        RegisterMinimalRpcInvoker(methodId, invoker);
+    }
+
+    private void RegisterMinimalRpcInvoker(int methodId, MinimalRpcInvokeDelegate invoker)
+    {
         if ((uint)methodId < FastJumpTableSize)
         {
             _fastRpcJumpTable[methodId] = invoker;
@@ -135,7 +180,7 @@ public sealed class RpcDispatcher
             ValueTask<bool> serviceTask = _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter);
             if (!serviceTask.IsCompletedSuccessfully)
             {
-                return AwaitGeneratedServicesSlowAsync(serviceTask, i, context, methodId, payload, responseWriter);
+                return AwaitGeneratedServicesSlowAsync(serviceTask, i, (context, methodId, payload, responseWriter));
             }
 
             if (serviceTask.Result)
@@ -150,10 +195,7 @@ public sealed class RpcDispatcher
     private async ValueTask<bool> AwaitGeneratedServicesSlowAsync(
         ValueTask<bool> pendingTask,
         int startIndex,
-        HayabusaContext context,
-        MethodId methodId,
-        ReadOnlyMemory<byte> payload,
-        PooledBufferWriter responseWriter)
+        (HayabusaContext Context, MethodId MethodId, ReadOnlyMemory<byte> Payload, PooledBufferWriter ResponseWriter) call)
     {
         if (await pendingTask)
         {
@@ -162,13 +204,13 @@ public sealed class RpcDispatcher
 
         for (int i = startIndex + 1; i < _generatedServices.Count; i++)
         {
-            if (await _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter))
+            if (await _generatedServices[i].TryDispatchRpcAsync(call.Context, call.MethodId, call.Payload, call.ResponseWriter))
             {
                 return true;
             }
         }
 
-        return TryDispatchMinimalOrError(context, methodId, payload.Span, responseWriter);
+        return TryDispatchMinimalOrError(call.Context, call.MethodId, call.Payload.Span, call.ResponseWriter);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

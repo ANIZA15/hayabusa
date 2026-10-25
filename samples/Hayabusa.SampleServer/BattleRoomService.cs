@@ -54,6 +54,17 @@ public sealed partial class BattleRoomService : RoomActor
     }
 
     /// <summary>
+    /// Compact RPC endpoint demonstrating auto-assigned <c>MethodId</c>, multiple parameters without a wrapper DTO,
+    /// and a synchronous return value.
+    /// </summary>
+    [Rpc]
+    public WorldSnapshot Teleport(float x, float y, float z)
+    {
+        UpdatePlayerPosition(Context.ConnectionId, new MoveCommand(x, y, z));
+        return new WorldSnapshot(CurrentTick, PlayerCount);
+    }
+
+    /// <summary>
     /// Health-check HTTP endpoint generated via <c>[Get]</c> attribute routing.
     /// </summary>
     [Get("/room/status")]

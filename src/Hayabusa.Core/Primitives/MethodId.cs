@@ -27,6 +27,32 @@ public readonly partial record struct MethodId(int Value) : IComparable<MethodId
         get => Value > 0;
     }
 
+    /// <summary>
+    /// Computes a deterministic positive 31-bit FNV-1a <see cref="MethodId"/> from a service name and method name.
+    /// Used when <c>[Rpc]</c> is declared without an explicit integer identifier.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static MethodId FromRoute(ReadOnlySpan<char> serviceName, ReadOnlySpan<char> methodName)
+    {
+        uint hash = HashCharsFnv1a(2166136261u, serviceName);
+        hash = (hash ^ '.') * 16777619u;
+        hash = HashCharsFnv1a(hash, methodName);
+        int positive = (int)(hash & 0x7FFFFFFFu);
+        return new MethodId(positive == 0 ? 1 : positive);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint HashCharsFnv1a(uint seed, scoped ReadOnlySpan<char> chars)
+    {
+        uint hash = seed;
+        for (int i = 0; i < chars.Length; i++)
+        {
+            hash = (hash ^ chars[i]) * 16777619u;
+        }
+
+        return hash;
+    }
+
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int CompareTo(MethodId other) => Value.CompareTo(other.Value);
