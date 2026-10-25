@@ -148,6 +148,7 @@ hayabusa/
 ├── Hayabusa.slnx                    # XML ベースの新ソリューションファイル (.slnx)
 ├── .editorconfig                    # コードスタイル & 複雑度 (CA1502) / 型厳格 (CS8509) 強制設定
 ├── global.json                      # .NET 9 / .NET 10 / .NET 11+ SDK ロールフォワード設定 (latestMajor)
+├── LICENSE                          # Hayabusa プロジェクトの MIT ライセンス全文
 ├── THIRD-PARTY-NOTICES.md           # Cysharp OSS 等の著作権表示・MIT ライセンス全文
 ├── src/
 │   ├── Hayabusa.Core/               # 強い型プリミティブ、軽量Context、Pinned Slab/RingBuffer、Completion I/O 抽象
@@ -299,6 +300,10 @@ Windows (WSL2) / macOS / Linux のどの環境でも、リポジトリを Cursor
 ---
 
 ## ライセンスと帰属表示（License, Attribution & Disclaimer）
+
+### プロジェクトライセンス
+
+`Hayabusa` は [MIT License](LICENSE)（`Copyright (c) 2026 Hayabusa Contributors`）の下で公開されています。
 
 ### サードパーティ OSS ライセンス（Cysharp, Inc.）
 
