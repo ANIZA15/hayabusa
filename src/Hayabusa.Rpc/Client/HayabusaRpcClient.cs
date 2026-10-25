@@ -254,6 +254,7 @@ public sealed class HayabusaRpcClient : IDisposable
         out TResponse? response)
     {
         response = default;
+        DrainLeadingBroadcastFrames(methodId);
         FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
         if (err == FrameParseError.IncompleteData)
         {
@@ -261,12 +262,6 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
-        {
-            ConsumeBufferedBytes(frame.ConsumedBytes);
-            return false;
-        }
-
         response = MemoryPackSerializer.Deserialize<TResponse>(frame.Payload);
         ConsumeBufferedBytes(frame.ConsumedBytes);
         return true;
@@ -274,6 +269,7 @@ public sealed class HayabusaRpcClient : IDisposable
 
     private bool TryConsumeNextVoidAckFrame(MethodId methodId)
     {
+        DrainLeadingBroadcastFrames(methodId);
         FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
         if (err == FrameParseError.IncompleteData)
         {
@@ -281,9 +277,23 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        bool isBroadcast = (frame.Header.Flags & RpcFrameFlags.Broadcast) != 0;
         ConsumeBufferedBytes(frame.ConsumedBytes);
-        return !isBroadcast;
+        return true;
+    }
+
+    private void DrainLeadingBroadcastFrames(MethodId methodId)
+    {
+        while (true)
+        {
+            FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
+            if (err == FrameParseError.IncompleteData || (frame.Header.Flags & RpcFrameFlags.Broadcast) == 0)
+            {
+                return;
+            }
+
+            ValidateResponseFrame(err, frame.Header.Flags, methodId);
+            ConsumeBufferedBytes(frame.ConsumedBytes);
+        }
     }
 
     private static void ValidateResponseFrame(FrameParseError error, RpcFrameFlags flags, MethodId methodId)

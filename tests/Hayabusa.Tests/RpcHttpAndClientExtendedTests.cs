@@ -330,10 +330,12 @@ public sealed class RpcHttpAndClientExtendedTests
         Assert.False(MemoryPackPayloadGuard.ValidateCollectionHeader(minusTwo));
 
         // Valid 2-element int array
-        byte[] validArray = MemoryPackSerializer.Serialize(new[] { 10, 20 });
+        int[] expected = [10, 20];
+        byte[] validArray = MemoryPackSerializer.Serialize(expected);
         Assert.True(MemoryPackPayloadGuard.ValidateCollectionHeader(validArray, minElementByteSize: 4));
         Assert.True(MemoryPackPayloadGuard.TryDeserializeSafe(validArray, out int[]? parsed, isCollectionOrStringRoot: true));
-        Assert.Equal([10, 20], parsed);
+        Assert.NotNull(parsed);
+        Assert.Equal(expected, parsed);
 
         // Corrupted payload for a complex type that triggers MemoryPackSerializationException
         byte[] corruptedString = [0x01, 0x00, 0x00, 0x00];

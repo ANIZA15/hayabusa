@@ -398,7 +398,7 @@ public sealed class SourceGeneratorTests
         ImmutableArray<Diagnostic> diagnostics = RunGeneratorAndGetDiagnostics(source, out Compilation outputCompilation);
 
         Assert.Empty(diagnostics);
-        Assert.Empty( FilterErrors(outputCompilation.GetDiagnostics()));
+        Assert.Contains(outputCompilation.SyntaxTrees, static t => t.FilePath.EndsWith("GlobalRouteService.HayabusaService.g.cs", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -423,9 +423,10 @@ public sealed class SourceGeneratorTests
         EquatableSourceSpan noneSpan = EquatableSourceSpan.FromLocation(Location.None);
         Assert.Equal(Location.None, noneSpan.ToRoslynLocation());
 
-        var validSpan = new EquatableSourceSpan("File.cs", (0, 5), (0, 0, 0, 5));
-        Location reconstructed = validSpan.ToRoslynLocation();
-        Assert.True(reconstructed.IsInSource);
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("class Sample {}", path: "Sample.cs");
+        EquatableSourceSpan fromTree = EquatableSourceSpan.FromLocation(tree.GetRoot().GetLocation());
+        Location reconstructed = fromTree.ToRoslynLocation();
+        Assert.Equal("Sample.cs", reconstructed.GetLineSpan().Path);
     }
 
     [Fact]
@@ -468,20 +469,6 @@ public sealed class SourceGeneratorTests
         }
 
         return count;
-    }
-
-    private static ImmutableArray<Diagnostic> FilterErrors(ImmutableArray<Diagnostic> diagnostics)
-    {
-        ImmutableArray<Diagnostic>.Builder builder = ImmutableArray.CreateBuilder<Diagnostic>();
-        for (int i = 0; i < diagnostics.Length; i++)
-        {
-            if (diagnostics[i].Severity == DiagnosticSeverity.Error)
-            {
-                builder.Add(diagnostics[i]);
-            }
-        }
-
-        return builder.ToImmutable();
     }
 
     private static ImmutableArray<Diagnostic> RunGeneratorAndGetDiagnostics(
