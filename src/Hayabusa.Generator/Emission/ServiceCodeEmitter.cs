@@ -173,7 +173,10 @@ internal static class ServiceCodeEmitter
 
         if (string.IsNullOrEmpty(route.BoundParameterName))
         {
-            sb.Append(" && global::System.MemoryExtensions.SequenceEqual(request.Path, \"")
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(route.RouteTemplate);
+            sb.Append(" && request.Path.Length == ")
+              .Append(utf8Bytes.Length)
+              .Append(" && global::System.MemoryExtensions.SequenceEqual(request.Path, \"")
               .Append(route.RouteTemplate)
               .AppendLine("\"u8))");
             sb.AppendLine("        {");
@@ -186,7 +189,9 @@ internal static class ServiceCodeEmitter
         {
             int braceIdx = route.RouteTemplate.IndexOf('{');
             string prefix = route.RouteTemplate.Substring(0, braceIdx);
-            sb.Append(" && global::System.MemoryExtensions.StartsWith(request.Path, \"")
+            sb.Append(" && request.Path.Length > ")
+              .Append(prefix.Length)
+              .Append(" && global::System.MemoryExtensions.StartsWith(request.Path, \"")
               .Append(prefix)
               .AppendLine("\"u8))");
             sb.AppendLine("        {");

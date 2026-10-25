@@ -311,36 +311,39 @@ public sealed class CoreWorker : IDisposable
 
     private void DrainBufferedFrames(ConnectionId connectionId, ContiguousReceiveBuffer buffer)
     {
+        _responseWriter.Clear();
         while (buffer.ReadableBytes > 0)
         {
-            ReadOnlySpan<byte> readable = buffer.ReadableSpan;
-            if (LooksLikeHttpRequest(readable))
+            if (!TryDrainSingleFrameFromBuffer(connectionId, buffer))
             {
-                if (!IsWebEnabled)
-                {
-                    EvictConnection(connectionId, enqueueTransportDisconnect: true);
-                    return;
-                }
-
-                if (!TryProcessHttpBuffer(connectionId, buffer))
-                {
-                    return;
-                }
-
-                continue;
-            }
-
-            if (!IsGameEnabled)
-            {
-                SendBadRequestAndDisconnect(connectionId);
-                return;
-            }
-
-            if (!TryProcessRpcBuffer(connectionId, buffer))
-            {
-                return;
+                break;
             }
         }
+
+        EnqueueBufferedResponseIfAny(connectionId);
+    }
+
+    private bool TryDrainSingleFrameFromBuffer(ConnectionId connectionId, ContiguousReceiveBuffer buffer)
+    {
+        ReadOnlySpan<byte> readable = buffer.ReadableSpan;
+        if (LooksLikeHttpRequest(readable))
+        {
+            if (!IsWebEnabled)
+            {
+                EvictConnection(connectionId, enqueueTransportDisconnect: true);
+                return false;
+            }
+
+            return TryProcessHttpBuffer(connectionId, buffer);
+        }
+
+        if (!IsGameEnabled)
+        {
+            SendBadRequestAndDisconnect(connectionId);
+            return false;
+        }
+
+        return TryProcessRpcBuffer(connectionId, buffer);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -384,9 +387,8 @@ public sealed class CoreWorker : IDisposable
 
     private void ExecuteParsedHttpRequest(ConnectionId connectionId, in HttpRequestView req)
     {
-        _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick);
+        _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick, clearWriter: false);
         _dispatcher.DispatchHttp(_context, in req, _responseWriter);
-        EnqueueBufferedResponseIfAny(connectionId);
     }
 
     private void SendBadRequestAndDisconnect(ConnectionId connectionId)
@@ -426,12 +428,11 @@ public sealed class CoreWorker : IDisposable
     {
         try
         {
-            _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick);
+            _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick, clearWriter: false);
             ValueTask<bool> dispatchTask = _dispatcher.DispatchAsync(_context, methodId, payload, _responseWriter);
             if (dispatchTask.IsCompletedSuccessfully)
             {
                 _ = dispatchTask.GetAwaiter().GetResult();
-                EnqueueBufferedResponseIfAny(connectionId);
                 return;
             }
 
@@ -472,6 +473,7 @@ public sealed class CoreWorker : IDisposable
             if (written.Length <= slotSpan.Length)
             {
                 written.CopyTo(slotSpan);
+                _responseWriter.Clear();
                 ReadOnlyMemory<byte> memory = _transport.SlabPool.GetSlotMemory(slotIndex, generation).Slice(0, written.Length);
                 var token = new SlabSlotToken(slotIndex, generation);
                 if (!_submissionQueue.TryEnqueueSend(connectionId, memory, token))
@@ -486,6 +488,7 @@ public sealed class CoreWorker : IDisposable
         }
 
         _submissionQueue.TryEnqueueSend(connectionId, _responseWriter.WrittenMemory.ToArray());
+        _responseWriter.Clear();
     }
 
     private void DrainCrossCoreMailbox()

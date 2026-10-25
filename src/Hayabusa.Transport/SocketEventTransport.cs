@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using Hayabusa.Core.Buffers;
 using Hayabusa.Core.Primitives;
@@ -10,17 +12,22 @@ using Hayabusa.Core.Transport;
 namespace Hayabusa.Transport;
 
 /// <summary>
-/// Cross-platform completion-based transport backed by non-blocking sockets and pre-allocated pinned slab buffers.
-/// Serves as the default fallback on Windows (<c>IOCP</c>), macOS (<c>kqueue</c>), and restricted Linux containers.
+/// Cross-platform $O(1)$ completion-driven transport backed by OS <c>epoll</c> (Linux), <c>IOCP</c> (Windows),
+/// or <c>kqueue</c> (macOS) via pre-allocated <see cref="SocketAsyncEventArgs"/> and pinned slab buffers.
+/// Eliminates $O(N)$ socket polling and supports <c>SO_REUSEPORT</c> multi-core parallel accepts and multi-port listeners.
 /// Ownership: Caller must call <see cref="Dispose"/> to close active sockets and release the slab pool.
 /// </summary>
 public sealed class SocketEventTransport : ITransportBackend
 {
+    private const int LinuxSolSocket = 1;
+    private const int LinuxSoReusePort = 15;
+
     private readonly PinnedSlabPool _slabPool;
     private readonly ConcurrentQueue<TransportCompletionEvent> _completions = new();
-    private readonly ConcurrentDictionary<ConnectionId, Socket> _connections = new();
+    private readonly ConcurrentDictionary<ConnectionId, ClientSession> _sessions = new();
+    private readonly List<Socket> _listenerSockets = new(2);
+    private readonly List<SocketAsyncEventArgs> _acceptEventArgs = new(2);
     private readonly ManualResetEventSlim _wakeSignal = new(false);
-    private Socket? _listenerSocket;
     private ulong _nextConnectionSequence;
     private bool _disposed;
 
@@ -39,36 +46,51 @@ public sealed class SocketEventTransport : ITransportBackend
     /// <inheritdoc />
     public PinnedSlabPool SlabPool => _slabPool;
 
+    /// <summary>Gets the number of active listener sockets bound on this transport.</summary>
+    public int ListenerCount => _listenerSockets.Count;
+
     /// <summary>
-    /// Binds and starts listening on the specified local endpoint if TCP socket listening is requested.
+    /// Binds and starts listening on the specified local endpoint using $O(1)$ asynchronous accept completions
+    /// and optional <c>SO_REUSEPORT</c> for multi-core Thread-per-Core scaling.
     /// </summary>
-    public void BindAndListen(IPEndPoint endPoint, int backlog = 512)
+    public void BindAndListen(IPEndPoint endPoint, int backlog = 4096, bool enableReusePort = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(endPoint);
 
-        var socket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+        var listener = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
         {
             NoDelay = true,
-            Blocking = false,
         };
-        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        socket.Bind(endPoint);
-        socket.Listen(backlog);
-        _listenerSocket = socket;
+        listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        if (enableReusePort)
+        {
+            TryEnableReusePort(listener);
+        }
+
+        listener.Bind(endPoint);
+        listener.Listen(backlog);
+        _listenerSockets.Add(listener);
+
+        var acceptArgs = new SocketAsyncEventArgs { UserToken = listener };
+        acceptArgs.Completed += OnAcceptCompleted;
+        _acceptEventArgs.Add(acceptArgs);
+        IssueAcceptAsync(listener, acceptArgs);
     }
 
     /// <inheritdoc />
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int DrainCompletions(Span<TransportCompletionEvent> destination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        PollListenerAccepts();
-        PollConnectedSockets();
-
         int count = 0;
         while (count < destination.Length && _completions.TryDequeue(out TransportCompletionEvent ev))
         {
             destination[count++] = ev;
+            if (ev.Operation == TransportOperationKind.Receive && _sessions.TryGetValue(ev.ConnectionId, out ClientSession? session))
+            {
+                session.MarkArmedForNextReceive();
+            }
         }
 
         return count;
@@ -82,6 +104,8 @@ public sealed class SocketEventTransport : ITransportBackend
         {
             ExecuteSubmission(in submissions[i]);
         }
+
+        RearmPendingReceives();
 
         if (_completions.IsEmpty && timeout > TimeSpan.Zero)
         {
@@ -100,84 +124,189 @@ public sealed class SocketEventTransport : ITransportBackend
         }
 
         _disposed = true;
-        _listenerSocket?.Dispose();
-        foreach (Socket client in _connections.Values)
+        _wakeSignal.Set();
+
+        for (int i = 0; i < _listenerSockets.Count; i++)
         {
-            client.Dispose();
+            _listenerSockets[i].Dispose();
         }
 
-        _connections.Clear();
+        for (int i = 0; i < _acceptEventArgs.Count; i++)
+        {
+            _acceptEventArgs[i].Dispose();
+        }
+
+        foreach (ClientSession session in _sessions.Values)
+        {
+            session.Dispose();
+        }
+
+        _sessions.Clear();
+        _listenerSockets.Clear();
+        _acceptEventArgs.Clear();
         _wakeSignal.Dispose();
         _slabPool.Dispose();
     }
 
-    private void PollListenerAccepts()
+    private static void TryEnableReusePort(Socket socket)
     {
-        Socket? listener = _listenerSocket;
-        if (listener is null)
+        if (!OperatingSystem.IsLinux())
         {
             return;
         }
 
         try
         {
-            while (listener.Poll(0, SelectMode.SelectRead))
-            {
-                Socket client = listener.Accept();
-                client.NoDelay = true;
-                client.Blocking = false;
-                var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionSequence));
-                _connections[id] = client;
-                _completions.Enqueue(new TransportCompletionEvent(TransportOperationKind.Accept, id, 0, SlabSlotToken.None));
-            }
+            socket.SetRawSocketOption(LinuxSolSocket, LinuxSoReusePort, [1, 0, 0, 0]);
         }
         catch (SocketException)
         {
-            // Non-blocking EWOULDBLOCK or transient accept error; handled on next tick.
+            // Kernel or container policy does not permit SO_REUSEPORT; proceed with standard ReuseAddress.
         }
     }
 
-    private void PollConnectedSockets()
+    private void IssueAcceptAsync(Socket listener, SocketAsyncEventArgs acceptArgs)
     {
-        foreach (var pair in _connections)
+        while (!_disposed)
         {
-            PollSingleClient(pair.Key, pair.Value);
-        }
-    }
-
-    private void PollSingleClient(ConnectionId id, Socket socket)
-    {
-        try
-        {
-            if (!socket.Poll(0, SelectMode.SelectRead))
+            acceptArgs.AcceptSocket = null;
+            try
+            {
+                if (listener.AcceptAsync(acceptArgs))
+                {
+                    return;
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException)
             {
                 return;
             }
 
+            if (!ProcessAcceptedSocket(acceptArgs))
+            {
+                return;
+            }
+        }
+    }
+
+    private void OnAcceptCompleted(object? sender, SocketAsyncEventArgs e)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (ProcessAcceptedSocket(e) && e.UserToken is Socket listener)
+        {
+            IssueAcceptAsync(listener, e);
+        }
+    }
+
+    private bool ProcessAcceptedSocket(SocketAsyncEventArgs e)
+    {
+        if (e.SocketError != SocketError.Success || e.AcceptSocket is null)
+        {
+            e.AcceptSocket?.Dispose();
+            return !_disposed;
+        }
+
+        Socket client = e.AcceptSocket;
+        client.NoDelay = true;
+        var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionSequence));
+        var receiveArgs = new SocketAsyncEventArgs();
+        receiveArgs.Completed += OnReceiveCompleted;
+
+        var session = new ClientSession(id, client, receiveArgs);
+        _sessions[id] = session;
+        EnqueueCompletionAndWake(new TransportCompletionEvent(TransportOperationKind.Accept, id, 0, SlabSlotToken.None));
+        TryStartReceiveAsync(session);
+        return true;
+    }
+
+    private void RearmPendingReceives()
+    {
+        foreach (ClientSession session in _sessions.Values)
+        {
+            if (session.ConsumeNeedsRearm())
+            {
+                TryStartReceiveAsync(session);
+            }
+        }
+    }
+
+    private void TryStartReceiveAsync(ClientSession session)
+    {
+        while (!_disposed && !session.IsClosed)
+        {
             if (!_slabPool.TryRentSlot(out int slot, out uint gen))
             {
+                session.MarkArmedForNextReceive();
                 return;
             }
 
-            Span<byte> buffer = _slabPool.GetSlotSpan(slot, gen);
-            int read = socket.Receive(buffer, SocketFlags.None);
-            if (read <= 0)
+            Memory<byte> memory = _slabPool.GetSlotMemory(slot, gen);
+            session.CurrentSlot = new SlabSlotToken(slot, gen);
+            session.ReceiveArgs.SetBuffer(memory);
+
+            try
+            {
+                if (session.Socket.ReceiveAsync(session.ReceiveArgs))
+                {
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
             {
                 _slabPool.ReturnSlot(slot, gen);
-                CloseConnection(id);
+                session.CurrentSlot = SlabSlotToken.None;
+                CloseConnection(session.Id);
                 return;
             }
 
-            _completions.Enqueue(new TransportCompletionEvent(
-                TransportOperationKind.Receive,
-                id,
-                read,
-                new SlabSlotToken(slot, gen)));
+            if (!CompleteReceiveSyncOrAsync(session, session.ReceiveArgs))
+            {
+                return;
+            }
         }
-        catch (SocketException)
+    }
+
+    private void OnReceiveCompleted(object? sender, SocketAsyncEventArgs e)
+    {
+        if (e.UserToken is ClientSession session)
         {
-            CloseConnection(id);
+            _ = CompleteReceiveSyncOrAsync(session, e);
         }
+    }
+
+    private bool CompleteReceiveSyncOrAsync(ClientSession session, SocketAsyncEventArgs e)
+    {
+        SlabSlotToken slot = session.CurrentSlot;
+        session.CurrentSlot = SlabSlotToken.None;
+
+        int bytesTransferred = e.BytesTransferred;
+        if (_disposed || e.SocketError != SocketError.Success || bytesTransferred <= 0)
+        {
+            if (slot.HasSlot)
+            {
+                _slabPool.ReturnSlot(slot.SlotIndex, slot.Generation);
+            }
+
+            CloseConnection(session.Id);
+            return false;
+        }
+
+        EnqueueCompletionAndWake(new TransportCompletionEvent(
+            TransportOperationKind.Receive,
+            session.Id,
+            bytesTransferred,
+            slot));
+
+        // Wait until the worker drains and processes this CQE before issuing the next Receive on this connection
+        return false;
     }
 
     private void ExecuteSubmission(in TransportSubmissionEntry entry)
@@ -199,16 +328,27 @@ public sealed class SocketEventTransport : ITransportBackend
 
     private void SendToSocket(ConnectionId id, scoped ReadOnlySpan<byte> payload)
     {
-        if (!_connections.TryGetValue(id, out Socket? socket))
+        if (!_sessions.TryGetValue(id, out ClientSession? session) || session.IsClosed)
         {
             return;
         }
 
         try
         {
-            socket.Send(payload, SocketFlags.None);
+            int sent = 0;
+            while (sent < payload.Length)
+            {
+                int n = session.Socket.Send(payload.Slice(sent), SocketFlags.None);
+                if (n <= 0)
+                {
+                    CloseConnection(id);
+                    return;
+                }
+
+                sent += n;
+            }
         }
-        catch (SocketException)
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
         {
             CloseConnection(id);
         }
@@ -216,10 +356,10 @@ public sealed class SocketEventTransport : ITransportBackend
 
     private void CloseConnection(ConnectionId id)
     {
-        if (_connections.TryRemove(id, out Socket? socket))
+        if (_sessions.TryRemove(id, out ClientSession? session))
         {
-            socket.Dispose();
-            _completions.Enqueue(new TransportCompletionEvent(
+            session.Dispose();
+            EnqueueCompletionAndWake(new TransportCompletionEvent(
                 TransportOperationKind.Disconnect,
                 id,
                 0,
@@ -227,12 +367,75 @@ public sealed class SocketEventTransport : ITransportBackend
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnqueueCompletionAndWake(in TransportCompletionEvent ev)
+    {
+        _completions.Enqueue(ev);
+        if (!_wakeSignal.IsSet)
+        {
+            _wakeSignal.Set();
+        }
+    }
+
     private void WaitWithDeadline(TimeSpan timeout)
     {
         int waitMs = (int)Math.Clamp(timeout.TotalMilliseconds, 0, 15);
-        if (waitMs > 0)
+        if (waitMs <= 0)
+        {
+            return;
+        }
+
+        _wakeSignal.Reset();
+        if (_completions.IsEmpty)
         {
             _wakeSignal.Wait(waitMs);
+        }
+    }
+
+    private sealed class ClientSession : IDisposable
+    {
+        private int _needsRearm;
+        private int _closed;
+
+        public ClientSession(ConnectionId id, Socket socket, SocketAsyncEventArgs receiveArgs)
+        {
+            Id = id;
+            Socket = socket;
+            ReceiveArgs = receiveArgs;
+            ReceiveArgs.UserToken = this;
+        }
+
+        public ConnectionId Id { get; }
+
+        public Socket Socket { get; }
+
+        public SocketAsyncEventArgs ReceiveArgs { get; }
+
+        public SlabSlotToken CurrentSlot { get; set; }
+
+        public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void MarkArmedForNextReceive() => Interlocked.Exchange(ref _needsRearm, 1);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool ConsumeNeedsRearm() => Interlocked.Exchange(ref _needsRearm, 0) == 1;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _closed, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                Socket.Dispose();
+            }
+            finally
+            {
+                ReceiveArgs.Dispose();
+            }
         }
     }
 }

@@ -47,12 +47,15 @@ public sealed class HayabusaContext
     /// Resets the context fields for the next incoming frame on the same worker thread with zero allocation.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Bind(ConnectionId connectionId, RoomId roomId, TickNumber currentTick)
+    public void Bind(ConnectionId connectionId, RoomId roomId, TickNumber currentTick, bool clearWriter = true)
     {
         ConnectionId = connectionId;
         RoomId = roomId;
         CurrentTick = currentTick;
-        _responseWriter.Clear();
+        if (clearWriter)
+        {
+            _responseWriter.Clear();
+        }
     }
 
     /// <summary>

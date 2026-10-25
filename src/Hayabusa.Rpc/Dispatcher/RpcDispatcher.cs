@@ -183,6 +183,6 @@ public sealed class RpcDispatcher
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Matches(HttpMethodKind method, scoped ReadOnlySpan<byte> path) =>
-            _method == method && path.SequenceEqual(_pathUtf8);
+            _method == method && path.Length == _pathUtf8.Length && path.SequenceEqual(_pathUtf8);
     }
 }
