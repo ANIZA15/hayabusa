@@ -372,7 +372,7 @@ public sealed class CoreWorker : IDisposable
             return false;
         }
 
-        if (!_rateLimiter.TryAcquire(connectionId))
+        if (!_rateLimiter.TryAcquire(connectionId, tokenCost: 0.1))
         {
             EvictConnection(connectionId, enqueueTransportDisconnect: true);
             return false;
@@ -416,20 +416,25 @@ public sealed class CoreWorker : IDisposable
         }
 
         int consumed = frame.ConsumedBytes;
-        ReadOnlyMemory<byte> payloadSlice = buffer.ReadableMemory.Slice(RpcHeader.Size, frame.Header.PayloadLength);
-        ExecuteParsedRpcFrame(connectionId, frame.Header.MethodId, payloadSlice);
+        ExecuteParsedRpcFrame(connectionId, in frame, buffer);
         buffer.Consume(consumed);
         _rateLimiter.ReleaseInFlight(connectionId);
         _timingWheel.TouchCompleteFrame(connectionId);
         return true;
     }
 
-    private void ExecuteParsedRpcFrame(ConnectionId connectionId, MethodId methodId, ReadOnlyMemory<byte> payload)
+    private void ExecuteParsedRpcFrame(ConnectionId connectionId, in FrameSlice frame, ContiguousReceiveBuffer buffer)
     {
         try
         {
             _context.Bind(connectionId, RoomId.Invalid, _tickScheduler.CurrentTick, clearWriter: false);
-            ValueTask<bool> dispatchTask = _dispatcher.DispatchAsync(_context, methodId, payload, _responseWriter);
+            if (_dispatcher.TryDispatchSync(_context, in frame, _responseWriter))
+            {
+                return;
+            }
+
+            ReadOnlyMemory<byte> payloadSlice = buffer.ReadableMemory.Slice(RpcHeader.Size, frame.Header.PayloadLength);
+            ValueTask<bool> dispatchTask = _dispatcher.DispatchAsync(_context, frame.Header.MethodId, payloadSlice, _responseWriter);
             if (dispatchTask.IsCompletedSuccessfully)
             {
                 _ = dispatchTask.GetAwaiter().GetResult();
@@ -440,7 +445,7 @@ public sealed class CoreWorker : IDisposable
         }
         catch (MemoryPackSerializationException)
         {
-            _logger?.ZLogWarning($"MemoryPack deserialization failed on {_coreIndex} for {connectionId} ({methodId})");
+            _logger?.ZLogWarning($"MemoryPack deserialization failed on {_coreIndex} for {connectionId} ({frame.Header.MethodId})");
             EvictConnection(connectionId, enqueueTransportDisconnect: true);
         }
     }

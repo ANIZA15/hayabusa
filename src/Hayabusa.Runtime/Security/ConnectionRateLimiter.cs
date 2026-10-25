@@ -47,18 +47,18 @@ public sealed class ConnectionRateLimiter
     public int TrackedCount => _buckets.Count;
 
     /// <summary>
-    /// Attempts to acquire 1 rate-limit token and 1 in-flight slot for <paramref name="connectionId"/>.
+    /// Attempts to acquire <paramref name="tokenCost"/> rate-limit tokens and 1 in-flight slot for <paramref name="connectionId"/>.
     /// Returns <c>false</c> when the client is flooding or exceeding backpressure limits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryAcquire(ConnectionId connectionId)
+    public bool TryAcquire(ConnectionId connectionId, double tokenCost = 1.0)
     {
         long now = _timeProvider.GetTimestamp();
         if (!_buckets.TryGetValue(connectionId, out BucketState state))
         {
             state = new BucketState
             {
-                Tokens = _maxBurstTokens - 1.0,
+                Tokens = _maxBurstTokens - tokenCost,
                 LastRefillTimestamp = now,
                 InFlightCount = 1,
             };
@@ -67,13 +67,13 @@ public sealed class ConnectionRateLimiter
         }
 
         RefillTokens(ref state, now);
-        if (state.Tokens < 1.0 || state.InFlightCount >= _maxInFlightRequests)
+        if (state.Tokens < tokenCost || state.InFlightCount >= _maxInFlightRequests)
         {
             _buckets[connectionId] = state;
             return false;
         }
 
-        state.Tokens -= 1.0;
+        state.Tokens -= tokenCost;
         state.InFlightCount++;
         _buckets[connectionId] = state;
         return true;
