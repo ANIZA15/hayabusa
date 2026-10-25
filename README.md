@@ -137,6 +137,8 @@ hayabusa/
 │   └── skills/                      # OpenAI Codex CLI 用スキル群 (全11種・完全同期)
 ├── scripts/
 │   └── sync-agent-skills.sh         # 全エージェント環境間の Skills・指示書一括同期＆検証スクリプト
+├── docs/
+│   └── WEB_SERVER_QUICKSTART.md     # Web サーバー構築クイックスタートガイド (Minimal API / Source Generator / Docker)
 ├── .devcontainer/                   # VS Code / Cursor 用 DevContainer (.NET 9 + liburing + 拡張機能永続化)
 │   ├── devcontainer.json
 │   └── Dockerfile
@@ -171,6 +173,58 @@ hayabusa/
 ## クイックスタート（サーバーの立ち上げ方・ローカル開発環境）
 
 さまざまな開発者・運用者が用途に応じてすぐに `Hayabusa` サーバーを立てて使用できるよう、以下の方法を用意しています。
+
+> **Web サーバー構築の詳細なステップバイステップガイド**:
+> ステートレス Web / HTTP API サーバーの構築手順（Minimal API、Source Generator 属性ルーティング、JSON / UTF-8 / `ZString` / `MemoryPack` レスポンス出力、CORS 自動対応、NativeAOT デプロイ）については、専用ガイド **[`docs/WEB_SERVER_QUICKSTART.md`](docs/WEB_SERVER_QUICKSTART.md)** もあわせて参照してください。
+
+### 0. 最短で Web サーバーを構築して動かす（Minimal API & Source Generator）
+
+`UseWebServerOnly()`（または CLI 引数 `--web-only` / 環境変数 `HAYABUSA_ROLE=web`）を指定すると、ゲーム用の定周期 Tick スケジューラを停止し、**CPU コアごとの専用ワーカースレッドを 100% HTTP/1.1 リクエスト処理に専念させる高速 Web サーバー**として起動できます。
+
+```csharp
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Hayabusa.Rpc;
+using Hayabusa.Runtime.Hosting;
+
+// 1. Web サーバー専用モード (HTTP ポート 5000) で構築
+using HayabusaApp app = HayabusaApp.CreateBuilder(args)
+    .UseWebServerOnly(httpPort: 5000)
+    .Build();
+
+// 2. Minimal API スタイルでのエンドポイント定義 (ゼロアロケーション出力)
+app.MapGet("/health", static ctx => ctx.WriteUtf8("OK"u8));
+app.MapGet("/api/status", static ctx => ctx.WriteJsonUtf8("""{"status":"ok","engine":"Hayabusa"}"""u8));
+app.MapGet("/api/core", static ctx => ctx.WriteZString("Handled by Core #{0}", ctx.CoreIndex.Value));
+app.MapPost("/api/echo", static ctx => ctx.WriteJsonUtf8("""{"received":true}"""u8));
+
+// 3. Source Generator 属性ルーティング ([HayabusaService] + [Get] / [Post]) の登録も可能
+app.MapService<UserWebService>();
+
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+await app.RunAsync(cts.Token);
+
+[HayabusaService]
+public sealed partial class UserWebService
+{
+    // {id} は Utf8Parser によりゼロアロケーションで int にバインドされる
+    [Get("/users/{id}")]
+    public void GetUser(int id) => _ = id;
+}
+```
+
+リポジトリ同梱のサンプルサーバーを Web 専用モードで即座に試す場合は、以下のコマンドを実行します。
+
+```bash
+# サンプルサーバーを Web 専用モード (Port: 5000) で起動
+dotnet run --project samples/Hayabusa.SampleServer -c Release -- --web-only --http-port 5000
+
+# 別ターミナルから動作確認
+curl -i http://localhost:5000/health
+curl -i http://localhost:5000/api/status
+```
 
 ### 1. Docker Compose で即座にサーバーを立てる（.NET SDK のインストール不要）
 
