@@ -451,6 +451,7 @@ public sealed class HayabusaRpcClient : IDisposable
         out TResponse? response)
     {
         response = default;
+        _ = DrainBufferedBroadcastFrames();
         FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
         if (err == FrameParseError.IncompleteData)
         {
@@ -458,13 +459,6 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
-        {
-            _ = TryDispatchBroadcastSlice(in frame);
-            ConsumeBufferedBytes(frame.ConsumedBytes);
-            return false;
-        }
-
         response = MemoryPackSerializer.Deserialize<TResponse>(frame.Payload);
         ConsumeBufferedBytes(frame.ConsumedBytes);
         return true;
@@ -472,6 +466,7 @@ public sealed class HayabusaRpcClient : IDisposable
 
     private bool TryConsumeNextVoidAckFrame(MethodId methodId)
     {
+        _ = DrainBufferedBroadcastFrames();
         FrameParseError err = FrameParser.TryParse(_receiveBuffer.AsSpan(0, _bufferedBytes), RpcHeader.DefaultMaxFrameSize, out FrameSlice frame);
         if (err == FrameParseError.IncompleteData)
         {
@@ -479,13 +474,6 @@ public sealed class HayabusaRpcClient : IDisposable
         }
 
         ValidateResponseFrame(err, frame.Header.Flags, methodId);
-        if ((frame.Header.Flags & RpcFrameFlags.Broadcast) != 0)
-        {
-            _ = TryDispatchBroadcastSlice(in frame);
-            ConsumeBufferedBytes(frame.ConsumedBytes);
-            return false;
-        }
-
         ConsumeBufferedBytes(frame.ConsumedBytes);
         return true;
     }

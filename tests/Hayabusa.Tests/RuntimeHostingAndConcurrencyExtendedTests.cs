@@ -144,30 +144,30 @@ public sealed class RuntimeHostingAndConcurrencyExtendedTests
     }
 
     [Fact]
-    public async Task SingleThreadSynchronizationContext_SendPostAndDrain_PreserveOwnerThreadAffinity()
+    public void SingleThreadSynchronizationContext_SendPostAndDrain_PreserveOwnerThreadAffinity()
     {
-        var syncCtx = new SingleThreadSynchronizationContext(new CoreIndex(1), Environment.CurrentManagedThreadId);
-        Assert.Equal(new CoreIndex(1), syncCtx.CoreIndex);
-        Assert.True(syncCtx.IsOnOwnerThread);
-        Assert.Same(syncCtx, syncCtx.CreateCopy());
+        var ownerSyncCtx = new SingleThreadSynchronizationContext(new CoreIndex(1), Environment.CurrentManagedThreadId);
+        Assert.Equal(new CoreIndex(1), ownerSyncCtx.CoreIndex);
+        Assert.True(ownerSyncCtx.IsOnOwnerThread);
+        Assert.Same(ownerSyncCtx, ownerSyncCtx.CreateCopy());
 
         int counter = 0;
         // Send on owner thread executes synchronously
-        syncCtx.Send(_ => counter += 10, null);
+        ownerSyncCtx.Send(_ => counter += 10, null);
         Assert.Equal(10, counter);
 
-        // Post and cross-thread Send enqueue into the work queue
-        syncCtx.Post(_ => counter += 5, null);
-        await Task.Run(() =>
-        {
-            Assert.False(syncCtx.IsOnOwnerThread);
-            syncCtx.Send(_ => counter += 20, null);
-        });
-
+        // Post enqueues into the work queue
+        ownerSyncCtx.Post(_ => counter += 5, null);
         Assert.Equal(10, counter);
-        Assert.Equal(1, syncCtx.DrainContinuations(maxItems: 1));
+        Assert.Equal(1, ownerSyncCtx.DrainContinuations(maxItems: 1));
         Assert.Equal(15, counter);
-        Assert.Equal(1, syncCtx.DrainContinuations(maxItems: 10));
+
+        // Non-owner thread context enqueues Send into the work queue instead of executing inline
+        var nonOwnerSyncCtx = new SingleThreadSynchronizationContext(new CoreIndex(2), ownerManagedThreadId: -1);
+        Assert.False(nonOwnerSyncCtx.IsOnOwnerThread);
+        nonOwnerSyncCtx.Send(_ => counter += 20, null);
+        Assert.Equal(15, counter);
+        Assert.Equal(1, nonOwnerSyncCtx.DrainContinuations(maxItems: 10));
         Assert.Equal(35, counter);
     }
 

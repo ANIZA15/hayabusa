@@ -162,19 +162,29 @@ public sealed class CoreWorker : IDisposable
     public void StepIteration(bool allowWaitForDeadline = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        SynchronizationContext? previousContext = SynchronizationContext.Current;
         EnsureThreadContextInstalled();
+        try
+        {
+            // Phase 1: Drain I/O Completions, Continuations & Cross-Core Mailboxes
+            DrainPhase1();
 
-        // Phase 1: Drain I/O Completions, Continuations & Cross-Core Mailboxes
-        DrainPhase1();
+            // Phase 2: Execute Scheduled Room Ticks (LogicLooper style)
+            ExecutePhase2RoomTicks();
 
-        // Phase 2: Execute Scheduled Room Ticks (LogicLooper style)
-        ExecutePhase2RoomTicks();
+            // Phase 3: Sweep Timeouts & Evict Dead/Slowloris Connections
+            SweepPhase3Timeouts();
 
-        // Phase 3: Sweep Timeouts & Evict Dead/Slowloris Connections
-        SweepPhase3Timeouts();
-
-        // Phase 4: Batch Flush / Submit I/O with next Tick Deadline
-        FlushPhase4Submissions(allowWaitForDeadline);
+            // Phase 4: Batch Flush / Submit I/O with next Tick Deadline
+            FlushPhase4Submissions(allowWaitForDeadline);
+        }
+        finally
+        {
+            if (!ReferenceEquals(previousContext, _syncContext))
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }
     }
 
     /// <summary>
@@ -183,9 +193,20 @@ public sealed class CoreWorker : IDisposable
     public void StepManualTick(TickNumber tick)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        SynchronizationContext? previousContext = SynchronizationContext.Current;
         EnsureThreadContextInstalled();
-        ExecuteSingleTick(tick);
-        FlushPhase4Submissions(allowWaitForDeadline: false);
+        try
+        {
+            ExecuteSingleTick(tick);
+            FlushPhase4Submissions(allowWaitForDeadline: false);
+        }
+        finally
+        {
+            if (!ReferenceEquals(previousContext, _syncContext))
+            {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }
     }
 
     /// <summary>

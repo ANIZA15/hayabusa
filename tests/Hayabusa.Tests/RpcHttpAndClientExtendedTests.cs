@@ -22,6 +22,7 @@ namespace Hayabusa.Tests;
 
 public sealed class RpcHttpAndClientExtendedTests
 {
+    private static readonly int[] SampleTwoInts = [10, 20];
     [Fact]
     public void RpcAndHttpAttributes_PropertiesAndValidation_StoreExpectedMetadata()
     {
@@ -105,6 +106,7 @@ public sealed class RpcHttpAndClientExtendedTests
     [InlineData("PUT /a HTTP/1.0\r\n\r\n", HttpMethodKind.Put)]
     [InlineData("DELETE /a HTTP/1.1\r\n\r\n", HttpMethodKind.Delete)]
     [InlineData("HEAD /a HTTP/1.1\r\n\r\n", HttpMethodKind.Head)]
+    [InlineData("OPTIONS /a HTTP/1.1\r\n\r\n", HttpMethodKind.Options)]
     public void HttpParser_SupportedMethodsAndVersions_ParseSuccessfully(string rawRequest, HttpMethodKind expectedMethod)
     {
         byte[] bytes = Encoding.ASCII.GetBytes(rawRequest);
@@ -118,7 +120,6 @@ public sealed class RpcHttpAndClientExtendedTests
     }
 
     [Theory]
-    [InlineData("OPTIONS /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("PATCH /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("BAD /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
     [InlineData("FOUR /a HTTP/1.1\r\n\r\n", HttpParseError.InvalidRequestLine)]
@@ -330,10 +331,11 @@ public sealed class RpcHttpAndClientExtendedTests
         Assert.False(MemoryPackPayloadGuard.ValidateCollectionHeader(minusTwo));
 
         // Valid 2-element int array
-        byte[] validArray = MemoryPackSerializer.Serialize(new[] { 10, 20 });
+        byte[] validArray = MemoryPackSerializer.Serialize(SampleTwoInts);
         Assert.True(MemoryPackPayloadGuard.ValidateCollectionHeader(validArray, minElementByteSize: 4));
         Assert.True(MemoryPackPayloadGuard.TryDeserializeSafe(validArray, out int[]? parsed, isCollectionOrStringRoot: true));
-        Assert.Equal([10, 20], parsed);
+        Assert.NotNull(parsed);
+        Assert.Equal(SampleTwoInts, parsed);
 
         // Corrupted payload for a complex type that triggers MemoryPackSerializationException
         byte[] corruptedString = [0x01, 0x00, 0x00, 0x00];
