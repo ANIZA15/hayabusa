@@ -25,6 +25,7 @@ public sealed class SocketEventTransport : ITransportBackend
     private readonly PinnedSlabPool _slabPool;
     private readonly ConcurrentQueue<TransportCompletionEvent> _completions = new();
     private readonly ConcurrentDictionary<ConnectionId, ClientSession> _sessions = new();
+    private readonly ConcurrentBag<SocketAsyncEventArgs> _receiveEventArgsPool = new();
     private readonly List<Socket> _listenerSockets = new(2);
     private readonly List<SocketAsyncEventArgs> _acceptEventArgs = new(2);
     private readonly ManualResetEventSlim _wakeSignal = new(false);
@@ -38,6 +39,7 @@ public sealed class SocketEventTransport : ITransportBackend
     public SocketEventTransport(PinnedSlabPool? slabPool = null)
     {
         _slabPool = slabPool ?? new PinnedSlabPool(64 * 1024, 128);
+        PreallocateReceiveEventArgs(Math.Min(128, _slabPool.BlockCount));
     }
 
     /// <inheritdoc />
@@ -141,11 +143,52 @@ public sealed class SocketEventTransport : ITransportBackend
             session.Dispose();
         }
 
+        while (_receiveEventArgsPool.TryTake(out SocketAsyncEventArgs? pooledArgs))
+        {
+            pooledArgs.Dispose();
+        }
+
         _sessions.Clear();
         _listenerSockets.Clear();
         _acceptEventArgs.Clear();
         _wakeSignal.Dispose();
         _slabPool.Dispose();
+    }
+
+    private void PreallocateReceiveEventArgs(int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            var args = new SocketAsyncEventArgs();
+            args.Completed += OnReceiveCompleted;
+            _receiveEventArgsPool.Add(args);
+        }
+    }
+
+    private SocketAsyncEventArgs RentReceiveEventArgs()
+    {
+        if (_receiveEventArgsPool.TryTake(out SocketAsyncEventArgs? args))
+        {
+            return args;
+        }
+
+        var created = new SocketAsyncEventArgs();
+        created.Completed += OnReceiveCompleted;
+        return created;
+    }
+
+    private void ReturnReceiveEventArgs(SocketAsyncEventArgs args)
+    {
+        args.UserToken = null;
+        args.SetBuffer(Memory<byte>.Empty);
+        if (!_disposed)
+        {
+            _receiveEventArgsPool.Add(args);
+        }
+        else
+        {
+            args.Dispose();
+        }
     }
 
     private static void TryEnableReusePort(Socket socket)
@@ -217,10 +260,9 @@ public sealed class SocketEventTransport : ITransportBackend
         Socket client = e.AcceptSocket;
         client.NoDelay = true;
         var id = new ConnectionId(Interlocked.Increment(ref _nextConnectionSequence));
-        var receiveArgs = new SocketAsyncEventArgs();
-        receiveArgs.Completed += OnReceiveCompleted;
+        SocketAsyncEventArgs receiveArgs = RentReceiveEventArgs();
 
-        var session = new ClientSession(id, client, receiveArgs);
+        var session = new ClientSession(id, client, receiveArgs, ReturnReceiveEventArgs);
         _sessions[id] = session;
         EnqueueCompletionAndWake(new TransportCompletionEvent(TransportOperationKind.Accept, id, 0, SlabSlotToken.None));
         TryStartReceiveAsync(session);
@@ -394,14 +436,20 @@ public sealed class SocketEventTransport : ITransportBackend
 
     private sealed class ClientSession : IDisposable
     {
+        private readonly Action<SocketAsyncEventArgs> _returnReceiveArgs;
         private int _needsRearm;
         private int _closed;
 
-        public ClientSession(ConnectionId id, Socket socket, SocketAsyncEventArgs receiveArgs)
+        public ClientSession(
+            ConnectionId id,
+            Socket socket,
+            SocketAsyncEventArgs receiveArgs,
+            Action<SocketAsyncEventArgs> returnReceiveArgs)
         {
             Id = id;
             Socket = socket;
             ReceiveArgs = receiveArgs;
+            _returnReceiveArgs = returnReceiveArgs;
             ReceiveArgs.UserToken = this;
         }
 
@@ -434,7 +482,7 @@ public sealed class SocketEventTransport : ITransportBackend
             }
             finally
             {
-                ReceiveArgs.Dispose();
+                _returnReceiveArgs(ReceiveArgs);
             }
         }
     }

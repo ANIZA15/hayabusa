@@ -69,7 +69,7 @@ public readonly record struct HttpRouteModel(
     string MethodName,
     string HttpVerb,
     string RouteTemplate,
-    string BoundParameterName);
+    (string Name, string TypeFullName) BoundParameter);
 
 /// <summary>
 /// Root value-equatable model for a `[HayabusaService]` class.

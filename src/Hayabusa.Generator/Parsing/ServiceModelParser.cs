@@ -328,7 +328,7 @@ internal static class ServiceModelParser
             ? s
             : string.Empty;
 
-        if (!TryValidateRouteTemplate(method, template, out string boundParam, out string errorReason))
+        if (!TryValidateRouteTemplate(method, template, out (string Name, string TypeFullName) boundParam, out string errorReason))
         {
             acc.Diagnostics.Add(new EquatableDiagnostic(
                 HayabusaDiagnostics.InvalidHttpRouteTemplate.Id,
@@ -343,10 +343,10 @@ internal static class ServiceModelParser
     private static bool TryValidateRouteTemplate(
         IMethodSymbol method,
         string template,
-        out string boundParam,
+        out (string Name, string TypeFullName) boundParam,
         out string errorReason)
     {
-        boundParam = string.Empty;
+        boundParam = (string.Empty, string.Empty);
         errorReason = string.Empty;
 
         if (string.IsNullOrWhiteSpace(template) || template[0] != '/')
@@ -361,10 +361,10 @@ internal static class ServiceModelParser
     private static bool TryParseRouteParameterBraces(
         IMethodSymbol method,
         string template,
-        out string boundParam,
+        out (string Name, string TypeFullName) boundParam,
         out string errorReason)
     {
-        boundParam = string.Empty;
+        boundParam = (string.Empty, string.Empty);
         errorReason = string.Empty;
 
         int openBrace = template.IndexOf('{');
@@ -381,26 +381,28 @@ internal static class ServiceModelParser
         }
 
         string paramName = template.Substring(openBrace + 1, closeBrace - openBrace - 1);
-        if (!HasParameterNamed(method, paramName))
+        if (!TryFindParameterType(method, paramName, out string paramTypeFullName))
         {
             errorReason = $"Route parameter '{{{paramName}}}' does not match any method parameter.";
             return false;
         }
 
-        boundParam = paramName;
+        boundParam = (paramName, paramTypeFullName);
         return true;
     }
 
-    private static bool HasParameterNamed(IMethodSymbol method, string paramName)
+    private static bool TryFindParameterType(IMethodSymbol method, string paramName, out string typeFullName)
     {
         for (int i = 0; i < method.Parameters.Length; i++)
         {
             if (string.Equals(method.Parameters[i].Name, paramName, StringComparison.Ordinal))
             {
+                typeFullName = method.Parameters[i].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                 return true;
             }
         }
 
+        typeFullName = string.Empty;
         return false;
     }
 

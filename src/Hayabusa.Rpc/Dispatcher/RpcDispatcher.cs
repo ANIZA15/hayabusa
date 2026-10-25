@@ -26,15 +26,20 @@ public delegate void HayabusaHttpHandler(HayabusaContext context);
 /// <summary>
 /// High-performance dispatcher supporting both Source-Generated <see cref="IHayabusaRpcService"/> implementations
 /// and Minimal API endpoint registrations (<c>MapRpc</c> / <c>MapGet</c> / <c>MapPost</c>).
+/// Uses a direct $O(1)$ array jump table for <see cref="MethodId"/> values in <c>0..1023</c> to eliminate dictionary hashing overhead,
+/// and bypasses async state machines when RPC handlers complete synchronously.
 /// </summary>
 public sealed class RpcDispatcher
 {
+    private const int FastJumpTableSize = 1024;
+
     private delegate bool MinimalRpcInvokeDelegate(
         HayabusaContext context,
         MethodId methodId,
         ReadOnlySpan<byte> payload,
         PooledBufferWriter responseWriter);
 
+    private readonly MinimalRpcInvokeDelegate?[] _fastRpcJumpTable = new MinimalRpcInvokeDelegate?[FastJumpTableSize];
     private readonly Dictionary<int, MinimalRpcInvokeDelegate> _minimalRpcHandlers = new();
     private readonly List<HttpRouteEntry> _httpRoutes = new();
     private readonly List<IHayabusaRpcService> _generatedServices = new();
@@ -58,13 +63,20 @@ public sealed class RpcDispatcher
         HayabusaRpcHandler<TRequest, TResponse> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        _minimalRpcHandlers[methodId] = (ctx, id, payload, writer) =>
+        MinimalRpcInvokeDelegate invoker = (ctx, id, payload, writer) =>
         {
             TRequest? req = MemoryPackSerializer.Deserialize<TRequest>(payload);
             TResponse res = handler(ctx, req!);
             FrameParser.WriteMemoryPackFrame(ref writer, id, RpcFrameFlags.Response, in res);
             return true;
         };
+
+        if ((uint)methodId < FastJumpTableSize)
+        {
+            _fastRpcJumpTable[methodId] = invoker;
+        }
+
+        _minimalRpcHandlers[methodId] = invoker;
     }
 
     /// <summary>
@@ -79,6 +91,7 @@ public sealed class RpcDispatcher
 
     /// <summary>
     /// Synchronously dispatches an incoming binary RPC frame with zero heap allocations on the hot path.
+    /// Uses $O(1)$ direct array indexing for method IDs under 1024.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryDispatchSync(
@@ -90,7 +103,11 @@ public sealed class RpcDispatcher
         ArgumentNullException.ThrowIfNull(responseWriter);
 
         int id = frame.Header.MethodId.Value;
-        if (_minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? minimalHandler))
+        MinimalRpcInvokeDelegate? minimalHandler = (uint)id < FastJumpTableSize
+            ? _fastRpcJumpTable[id]
+            : (_minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? fallback) ? fallback : null);
+
+        if (minimalHandler is not null)
         {
             return minimalHandler(context, frame.Header.MethodId, frame.Payload, responseWriter);
         }
@@ -101,8 +118,10 @@ public sealed class RpcDispatcher
 
     /// <summary>
     /// Dispatches an incoming binary RPC frame across registered source-generated services and Minimal API handlers.
+    /// Avoids async state machine overhead when services complete synchronously.
     /// </summary>
-    public async ValueTask<bool> DispatchAsync(
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<bool> DispatchAsync(
         HayabusaContext context,
         MethodId methodId,
         ReadOnlyMemory<byte> payload,
@@ -113,15 +132,60 @@ public sealed class RpcDispatcher
 
         for (int i = 0; i < _generatedServices.Count; i++)
         {
+            ValueTask<bool> serviceTask = _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter);
+            if (!serviceTask.IsCompletedSuccessfully)
+            {
+                return AwaitGeneratedServicesSlowAsync(serviceTask, i, context, methodId, payload, responseWriter);
+            }
+
+            if (serviceTask.Result)
+            {
+                return new ValueTask<bool>(true);
+            }
+        }
+
+        return new ValueTask<bool>(TryDispatchMinimalOrError(context, methodId, payload.Span, responseWriter));
+    }
+
+    private async ValueTask<bool> AwaitGeneratedServicesSlowAsync(
+        ValueTask<bool> pendingTask,
+        int startIndex,
+        HayabusaContext context,
+        MethodId methodId,
+        ReadOnlyMemory<byte> payload,
+        PooledBufferWriter responseWriter)
+    {
+        if (await pendingTask)
+        {
+            return true;
+        }
+
+        for (int i = startIndex + 1; i < _generatedServices.Count; i++)
+        {
             if (await _generatedServices[i].TryDispatchRpcAsync(context, methodId, payload, responseWriter))
             {
                 return true;
             }
         }
 
-        if (_minimalRpcHandlers.TryGetValue(methodId.Value, out MinimalRpcInvokeDelegate? minimalHandler))
+        return TryDispatchMinimalOrError(context, methodId, payload.Span, responseWriter);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryDispatchMinimalOrError(
+        HayabusaContext context,
+        MethodId methodId,
+        ReadOnlySpan<byte> payload,
+        PooledBufferWriter responseWriter)
+    {
+        int id = methodId.Value;
+        MinimalRpcInvokeDelegate? minimalHandler = (uint)id < FastJumpTableSize
+            ? _fastRpcJumpTable[id]
+            : (_minimalRpcHandlers.TryGetValue(id, out MinimalRpcInvokeDelegate? fallback) ? fallback : null);
+
+        if (minimalHandler is not null)
         {
-            return minimalHandler(context, methodId, payload.Span, responseWriter);
+            return minimalHandler(context, methodId, payload, responseWriter);
         }
 
         WriteUnknownMethodErrorFrame(ref responseWriter, methodId);

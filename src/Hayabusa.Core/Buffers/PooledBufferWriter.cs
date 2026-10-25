@@ -49,6 +49,28 @@ public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         get => _buffer.AsMemory(0, _writtenCount);
     }
 
+    /// <summary>
+    /// Reserves <paramref name="headerSize"/> bytes at the current write position and returns the offset
+    /// so the caller can backpatch the header after serializing a variable-length payload directly into this buffer.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int ReserveHeaderSpace(int headerSize)
+    {
+        EnsureCapacity(headerSize);
+        int offset = _writtenCount;
+        _writtenCount += headerSize;
+        return offset;
+    }
+
+    /// <summary>
+    /// Gets a writable span at a previously reserved offset for length backpatching (even if the backing array grew during payload serialization).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<byte> GetReservedSpan(int offset, int length)
+    {
+        return _buffer.AsSpan(offset, length);
+    }
+
     /// <summary>Resets the write cursor to zero without deallocating the backing buffer.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Clear()

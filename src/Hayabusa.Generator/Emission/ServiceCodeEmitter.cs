@@ -171,7 +171,7 @@ internal static class ServiceCodeEmitter
         sb.Append("        if (request.Method == global::Hayabusa.Rpc.Http.HttpMethodKind.")
           .Append(route.HttpVerb);
 
-        if (string.IsNullOrEmpty(route.BoundParameterName))
+        if (string.IsNullOrEmpty(route.BoundParameter.Name))
         {
             byte[] utf8Bytes = Encoding.UTF8.GetBytes(route.RouteTemplate);
             sb.Append(" && request.Path.Length == ")
@@ -187,21 +187,49 @@ internal static class ServiceCodeEmitter
         }
         else
         {
-            int braceIdx = route.RouteTemplate.IndexOf('{');
-            string prefix = route.RouteTemplate.Substring(0, braceIdx);
-            sb.Append(" && request.Path.Length > ")
-              .Append(prefix.Length)
-              .Append(" && global::System.MemoryExtensions.StartsWith(request.Path, \"")
-              .Append(prefix)
-              .AppendLine("\"u8))");
-            sb.AppendLine("        {");
-            sb.Append("            global::System.ReadOnlySpan<byte> seg = request.Path.Slice(").Append(prefix.Length).AppendLine(");");
-            sb.AppendLine("            string paramVal = global::System.Text.Encoding.UTF8.GetString(seg);");
-            sb.Append("            this.").Append(route.MethodName).AppendLine("(paramVal);");
-            sb.AppendLine("            global::Hayabusa.Rpc.Http.HttpResponseWriter.WriteOkUtf8(ref responseWriter, \"OK\"u8);");
-            sb.AppendLine("            return true;");
-            sb.AppendLine("        }");
+            EmitParameterizedHttpRouteBranch(sb, in route);
         }
+    }
+
+    private static void EmitParameterizedHttpRouteBranch(StringBuilder sb, in HttpRouteModel route)
+    {
+        int braceIdx = route.RouteTemplate.IndexOf('{');
+        string prefix = route.RouteTemplate.Substring(0, braceIdx);
+        sb.Append(" && request.Path.Length > ")
+          .Append(prefix.Length)
+          .Append(" && global::System.MemoryExtensions.StartsWith(request.Path, \"")
+          .Append(prefix)
+          .AppendLine("\"u8))");
+        sb.AppendLine("        {");
+        sb.Append("            global::System.ReadOnlySpan<byte> seg = request.Path.Slice(").Append(prefix.Length).AppendLine(");");
+        EmitZeroAllocRouteParameterBinding(sb, route.MethodName, route.BoundParameter.TypeFullName);
+        sb.AppendLine("            global::Hayabusa.Rpc.Http.HttpResponseWriter.WriteOkUtf8(ref responseWriter, \"OK\"u8);");
+        sb.AppendLine("            return true;");
+        sb.AppendLine("        }");
+    }
+
+    private static void EmitZeroAllocRouteParameterBinding(StringBuilder sb, string methodName, string paramType)
+    {
+        if (paramType is "int" or "long" or "ulong" or "uint" or "global::System.Guid")
+        {
+            sb.Append("            if (!global::System.Buffers.Text.Utf8Parser.TryParse(seg, out ")
+              .Append(paramType)
+              .AppendLine(" parsedVal, out int consumed) || consumed != seg.Length)")
+              .AppendLine("            {")
+              .AppendLine("                return false;")
+              .AppendLine("            }")
+              .Append("            this.").Append(methodName).AppendLine("(parsedVal);");
+            return;
+        }
+
+        if (paramType == "global::System.ReadOnlySpan<byte>")
+        {
+            sb.Append("            this.").Append(methodName).AppendLine("(seg);");
+            return;
+        }
+
+        sb.AppendLine("            string paramVal = global::System.Text.Encoding.UTF8.GetString(seg);");
+        sb.Append("            this.").Append(methodName).AppendLine("(paramVal);");
     }
 
     private static void EmitClientProxyClass(StringBuilder sb, in ServiceModel model)

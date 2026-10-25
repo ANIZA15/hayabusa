@@ -137,6 +137,21 @@ public sealed class FrameAndHttpParserTests
         Assert.Equal(0L, after - before);
     }
 
+    [Fact]
+    public void HttpResponseWriter_CachedServerAndDateHeader_ReturnsValidRfcHeaderWithZeroAllocation()
+    {
+        // Warmup
+        _ = HttpResponseWriter.CachedServerAndDateHeader;
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        ReadOnlySpan<byte> header = HttpResponseWriter.CachedServerAndDateHeader;
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Equal(55, header.Length);
+        Assert.True(header.StartsWith("Server: Hayabusa\r\nDate: "u8));
+        Assert.Equal(0L, after - before);
+    }
+
     private static void FeedAllExceptLastByte(ContiguousReceiveBuffer buffer, ReadOnlySpan<byte> frame)
     {
         for (int i = 0; i < frame.Length - 1; i++)
