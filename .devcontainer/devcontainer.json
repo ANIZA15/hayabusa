@@ -1,0 +1,50 @@
+{
+  "name": "Hayabusa (.NET 9 / Linux io_uring Dev)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "ubuntu",
+  "runArgs": [
+    "--cap-add=SYS_NICE",
+    "--security-opt",
+    "seccomp=unconfined",
+    "--ulimit",
+    "memlock=-1:-1"
+  ],
+  "mounts": [
+    "source=hayabusa-vscode-extensions,target=/home/ubuntu/.vscode-server/extensions,type=volume",
+    "source=hayabusa-cursor-extensions,target=/home/ubuntu/.cursor-server/extensions,type=volume",
+    "source=hayabusa-nuget-cache,target=/home/ubuntu/.nuget/packages,type=volume",
+    "source=hayabusa-bashhistory,target=/commandhistory,type=volume"
+  ],
+  "forwardPorts": [5000, 5001],
+  "portsAttributes": {
+    "5000": {
+      "label": "Hayabusa HTTP / MemoryPack RPC",
+      "onAutoForward": "notify"
+    },
+    "5001": {
+      "label": "Hayabusa Realtime Game Room / TCP",
+      "onAutoForward": "silent"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "ms-dotnettools.csharp",
+        "EditorConfig.EditorConfig",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "Hayabusa.sln",
+        "editor.formatOnSave": true,
+        "files.eol": "\n",
+        "files.insertFinalNewline": true,
+        "files.trimTrailingWhitespace": true
+      }
+    }
+  },
+  "postCreateCommand": "dotnet --info"
+}

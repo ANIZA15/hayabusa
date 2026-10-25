@@ -1,0 +1,15 @@
+**/.git
+**/.github
+**/.vs
+**/.vscode
+**/.cursor
+**/.devcontainer
+**/bin
+**/obj
+**/out
+**/artifacts
+**/TestResults
+**/BenchmarkDotNet.Artifacts
+**/*.user
+**/*.suo
+**/.DS_Store
