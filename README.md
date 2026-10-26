@@ -196,7 +196,9 @@ hayabusa/
 ├── samples/
 │   └── Hayabusa.SampleServer/       # MemoryPack RPC + Room Tick 同期サンプルサーバー
 ├── benchmarks/
-│   └── Hayabusa.Benchmarks/         # BenchmarkDotNet スイート (Kestrel / gRPC 比較・0B アロケーション検証)
+│   ├── README.md                    # ベンチマークスイート概要・実行ガイド
+│   ├── BENCHMARK_RESULTS.md         # Hayabusa vs Go (net/http) vs Rust (axum/tokio) 実測結果レポート
+│   └── Hayabusa.Benchmarks/         # BenchmarkDotNet & クロス言語 HTTP/1.1 ベンチマークランナー
 └── tests/
     ├── Hayabusa.Tests/              # 単体テスト・Source Generator テスト・ゼロリーク検証
     └── Hayabusa.PenetrationTests/   # 悪意あるペイロード・Length Bomb・Slowloris・ファジング検証
@@ -395,7 +397,9 @@ dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -- --cross-lang -
 dotnet run --project benchmarks/Hayabusa.Benchmarks -c Release -- --quick-compare
 ```
 
-### 3. 計測シナリオと実測サンプル（16 Keep-Alive Connections / 32,000 Requests）
+### 3. 計測シナリオと実測サンプル（16 & 32 Keep-Alive Connections）
+
+詳細な計測環境・32並列高負荷時の結果・インプロセス `0 B/op` マイクロベンチマーク結果と考察は **[`benchmarks/BENCHMARK_RESULTS.md`](benchmarks/BENCHMARK_RESULTS.md)** にまとめています。
 
 | シナリオ | サーバー実装 | スループット (`req/s`) | 平均レイテンシ (`us`) | P50 (`us`) | P99 (`us`) |
 | --- | --- | ---: | ---: | ---: | ---: |
